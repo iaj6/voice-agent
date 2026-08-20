@@ -169,8 +169,31 @@ class PostgresSessionStore implements SessionStore {
 
   async save(session: CheckInSession): Promise<void> {
     const sql = getDb();
-    // `completed_at is null` makes this a no-op once the record is locked,
-    // so the lock trigger never has to fire on our own writes.
+
+    // Ask before writing, so the three outcomes stay distinguishable. Filtering
+    // on `completed_at is null` inside the UPDATE collapsed two of them: a
+    // locked record and a *missing* record both produced zero rows and resolved
+    // successfully. A lost session has to be loud.
+    const existing = (await sql`
+      select completed_at from check_in_session where id = ${session.id}`) as {
+      completed_at: string | null;
+    }[];
+
+    if (existing.length === 0) {
+      throw new Error(
+        `Session ${session.id} is not in the database. Nothing was saved — ` +
+          "the record for this call may be incomplete.",
+      );
+    }
+
+    if (existing[0].completed_at !== null) {
+      // Already locked. Conversation after complete_check_in is not part of the
+      // record, so declining to write it is correct — but the audit trail is
+      // append-only and still accepts entries, so it is written regardless.
+      await this.appendAudit(session);
+      return;
+    }
+
     await sql`
       update check_in_session
          set status = ${session.status},
@@ -180,7 +203,7 @@ class PostgresSessionStore implements SessionStore {
              summary = ${session.summary},
              completed_at = ${session.completedAt},
              updated_at = now()
-       where id = ${session.id} and completed_at is null`;
+       where id = ${session.id}`;
     await this.appendAudit(session);
   }
 

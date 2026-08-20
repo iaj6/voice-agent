@@ -74,32 +74,81 @@ interface ChatCompletionRequest {
  */
 const conversationSessions = new Map<string, string>();
 
-function conversationKey(body: ChatCompletionRequest): string {
+function conversationKey(body: ChatCompletionRequest): string | null {
   const explicit =
     body.user_id ??
     body.user ??
     (body.elevenlabs_extra_body?.conversation_id as string | undefined);
   if (explicit) return `explicit:${explicit}`;
 
+  // Derived from the subject's FIRST utterance only.
+  //
+  // The previous key hashed system + first user message. On the opening turn
+  // there is no user message, so it hashed an empty string; on the next turn it
+  // hashed the subject's actual reply. The key changed, the lookup missed, and a
+  // second session was created mid-call — the subject was silently re-verified
+  // and everything captured in turn one was stranded in an abandoned session.
+  //
+  // Returning null on the opening turn is deliberate: there is nothing stable to
+  // key on yet, so the session is adopted on the next turn instead of registered
+  // under a key that is about to change.
   const firstUser = body.messages?.find((m) => m.role === "user")?.content ?? "";
-  const system = body.messages?.find((m) => m.role === "system")?.content ?? "";
+  if (!firstUser.trim()) return null;
   return (
-    "derived:" +
-    createHash("sha256").update(`${system}|${firstUser}`).digest("hex").slice(0, 24)
+    "derived:" + createHash("sha256").update(firstUser).digest("hex").slice(0, 24)
   );
+}
+
+/**
+ * The session created on an opening turn, waiting to be adopted once the subject
+ * speaks and a stable key exists. One slot, because a single shim instance is
+ * only ever mid-opening for one conversation at a time; a real deployment
+ * carries a conversation id and never needs this.
+ */
+let pendingOpeningSessionId: string | null = null;
+
+/** Bounded so a long-lived process cannot accumulate keys without limit. */
+const MAX_TRACKED_CONVERSATIONS = 500;
+
+function rememberConversation(key: string, sessionId: string) {
+  if (conversationSessions.size >= MAX_TRACKED_CONVERSATIONS) {
+    const oldest = conversationSessions.keys().next().value;
+    if (oldest !== undefined) conversationSessions.delete(oldest);
+  }
+  conversationSessions.set(key, sessionId);
 }
 
 async function resolveSession(
   body: ChatCompletionRequest,
 ): Promise<CheckInSession> {
   const key = conversationKey(body);
+
+  // Opening turn: no stable key yet. Create and park it.
+  if (key === null) {
+    const created = await createSession();
+    pendingOpeningSessionId = created.id;
+    return created;
+  }
+
   const existingId = conversationSessions.get(key);
   if (existingId) {
     const existing = await getSession(existingId);
     if (existing) return existing;
   }
+
+  // First real utterance: adopt the session opened a moment ago rather than
+  // starting a second one and stranding the greeting.
+  if (pendingOpeningSessionId) {
+    const adopted = await getSession(pendingOpeningSessionId);
+    pendingOpeningSessionId = null;
+    if (adopted) {
+      rememberConversation(key, adopted.id);
+      return adopted;
+    }
+  }
+
   const created = await createSession();
-  conversationSessions.set(key, created.id);
+  rememberConversation(key, created.id);
   return created;
 }
 
