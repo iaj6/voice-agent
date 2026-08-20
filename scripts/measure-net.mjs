@@ -93,7 +93,7 @@ line("NPV", npv, "when it is silent, how often that is safe");
 
 console.log(`\n${C.bold("  Where it is strong and where it is blind")}`);
 const kinds = [...new Set(rows.map((r) => r.kind))];
-const order = ["direct", "colloquial", "negated", "other_experiencer", "historical", "hypothetical", "benign"];
+const order = ["direct", "colloquial", "compound", "negated", "other_experiencer", "historical", "hypothetical", "benign"];
 kinds.sort((a, b) => order.indexOf(a) - order.indexOf(b));
 console.log(C.dim("    kind                  n     correct    note"));
 for (const kind of kinds) {

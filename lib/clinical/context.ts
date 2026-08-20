@@ -130,11 +130,34 @@ const TRIGGERS: Trigger[] = [
   },
 ];
 
-/** Ends any scope crossing it. */
+/**
+ * Ends any scope crossing it.
+ *
+ * Contrastive conjunctions were not enough. With only those, a trigger in one
+ * clause swallowed a signal in the next and the net stood down on real
+ * emergencies — "I have no appetite and I've been vomiting blood" was suppressed
+ * as negated, producing no escalation at all. Coordinating conjunctions and
+ * discourse markers open a new clause, and a new clause is a new assertion.
+ */
 const TERMINATORS = new Set([
+  // contrastive
   "but", "however", "although", "though", "except", "aside", "besides",
   "still", "yet", "whereas", "otherwise", "instead",
+  // coordinating and sequential — a new clause is a new assertion
+  "and", "then", "so", "now", "also", "plus", "additionally",
+  "actually", "anyway", "meanwhile", "afterwards", "because",
+  ",",
 ]);
+
+/**
+ * Comma is a clause boundary too — "I don't know, I've been having chest pain"
+ * kept the whole second clause inside the negation. Emitted as its own token so
+ * scopes stop at it.
+ *
+ * "or" is deliberately NOT a terminator: it continues a list under the same
+ * trigger, so "no fever or chills" stays negated throughout.
+ */
+const CLAUSE_BREAK = ",";
 
 interface Token {
   text: string;
@@ -148,12 +171,21 @@ interface Token {
 export function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   let sentence = 0;
-  const re = /[A-Za-z0-9']+|[.!?;]/g;
+  const re = /[A-Za-z0-9']+|[.!?;,]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const raw = m[0];
     if (/^[.!?;]$/.test(raw)) {
       sentence++;
+      continue;
+    }
+    if (raw === CLAUSE_BREAK) {
+      tokens.push({
+        text: CLAUSE_BREAK,
+        start: m.index,
+        end: m.index + 1,
+        sentence,
+      });
       continue;
     }
     tokens.push({

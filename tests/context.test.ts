@@ -160,3 +160,42 @@ test("a completed stop sequence leaves nothing speakable behind", () => {
   assert.ok(!said.includes("us"), `leaked stop-sequence prefix: ${JSON.stringify(said)}`);
   assert.equal(said.trimEnd(), "Have you had any chest pain?");
 });
+
+// --- clause boundaries -------------------------------------------------------
+// A trigger in one clause must not swallow a signal in the next. Before this,
+// "I have no appetite and I've been vomiting blood" was suppressed as negated
+// and produced no escalation at all.
+test("a scope does not cross a coordinating conjunction", () => {
+  for (const text of [
+    "I have no appetite and I've been vomiting blood.",
+    "I saw my doctor last week and now I'm coughing up blood.",
+    "The nurse checked me, then I had a seizure.",
+  ]) {
+    assert.ok(
+      assertedHits(scanForSafetySignals(text)).length > 0,
+      `must still fire: ${text}`,
+    );
+  }
+});
+
+test("a scope does not cross a comma", () => {
+  assert.ok(
+    assertedHits(scanForSafetySignals("I don't know, I've been having chest pain.")).length > 0,
+  );
+});
+
+test("'or' continues a list under the same negation", () => {
+  // "or" must NOT terminate, or "no fever or chills" would assert chills.
+  assert.equal(
+    assertedHits(scanForSafetySignals("no fever or chills, nothing like that")).length,
+    0,
+  );
+});
+
+test("a negated list separated by commas stays negated", () => {
+  // Each item carries its own trigger, so comma-as-terminator is safe here.
+  assert.equal(
+    assertedHits(scanForSafetySignals("no fever, no chills, no bleeding")).length,
+    0,
+  );
+});

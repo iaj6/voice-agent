@@ -684,6 +684,60 @@
       "expect": null,
       "topic": "cardiac_respiratory",
       "kind": "other_experiencer"
+    },
+    {
+      "text": "I have no appetite and I've been vomiting blood",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "compound"
+    },
+    {
+      "text": "I don't know, I've been having chest pain",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "compound"
+    },
+    {
+      "text": "The nurse checked me, then I had a seizure",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "compound"
+    },
+    {
+      "text": "I saw my doctor last week and now I'm coughing up blood",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "compound"
+    },
+    {
+      "text": "my husband is fine, but I passed out on Tuesday",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "compound"
+    },
+    {
+      "text": "I had a fever years ago, and now I have one again",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "compound"
+    },
+    {
+      "text": "no fever, no chills, no bleeding",
+      "expect": null,
+      "topic": "fever",
+      "kind": "negated"
+    },
+    {
+      "text": "no fever or chills, nothing like that",
+      "expect": null,
+      "topic": "fever",
+      "kind": "negated"
+    },
+    {
+      "text": "I haven't had any bleeding and no fainting either",
+      "expect": null,
+      "topic": "bleeding",
+      "kind": "negated"
     }
   ]
 }
