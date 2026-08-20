@@ -1,26 +1,434 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ==========================================================================
+   ONX-301 Voice Check-In Console
+   Aesthetic: clinical instrumentation. Graphite chassis, sodium-amber signal,
+   oxide-red alarm. Data is monospaced and dense; chrome is quiet and thin.
+   The console has a heartbeat — the carrier trace in the masthead reflects
+   call state at all times, the way a bedside monitor does.
+   ========================================================================== */
+
+@theme {
+  --color-ink-000: #07080a;
+  --color-ink-050: #0c0e11;
+  --color-ink-100: #12151a;
+  --color-ink-150: #181c22;
+  --color-ink-200: #20252c;
+
+  --color-line: #1d222a;
+  --color-line-soft: #15191f;
+  --color-line-lit: #2c333d;
+
+  --color-bone: #e7e4dd;
+  --color-bone-dim: #969ca6;
+  --color-bone-faint: #5c636d;
+
+  --color-amber: #ffb454;
+  --color-amber-deep: #b57420;
+  --color-amber-ghost: #38270f;
+
+  --color-mint: #58c08a;
+  --color-mint-ghost: #10281d;
+
+  --color-rust: #f2861e;
+  --color-oxide: #ff5a52;
+  --color-oxide-ghost: #33110f;
+
+  --color-slate-signal: #6e9bd1;
+
+  --font-display: var(--font-instrument-serif), Georgia, serif;
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  html {
+    background: var(--color-ink-000);
+  }
+
+  body {
+    background:
+      radial-gradient(
+        1100px 620px at 18% -10%,
+        rgba(255, 180, 84, 0.06),
+        transparent 62%
+      ),
+      radial-gradient(
+        900px 520px at 92% 4%,
+        rgba(110, 155, 209, 0.05),
+        transparent 60%
+      ),
+      var(--color-ink-050);
+    color: var(--color-bone);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05" 1, "ss01" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Film grain. Keeps large dark fields from banding and gives the chassis
+     a physical, non-digital surface. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0.32;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+  }
+
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-200);
+    border-radius: 0;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-line-lit);
+  }
+
+  ::selection {
+    background: var(--color-amber-ghost);
+    color: var(--color-amber);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* --- Field labels: the small-caps monospace stamp used across every panel --- */
+  .stamp {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-bone-faint);
+    font-weight: 500;
+  }
+
+  .stamp-lit {
+    color: var(--color-amber-deep);
+  }
+
+  /* --- Chassis panels --- */
+  .panel {
+    background: linear-gradient(
+      180deg,
+      var(--color-ink-100) 0%,
+      var(--color-ink-050) 100%
+    );
+    border: 1px solid var(--color-line);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-ink-000);
+  }
+
+  /* --- Rules and dividers --- */
+  .hairline {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--color-line-lit) 12%,
+      var(--color-line-lit) 88%,
+      transparent
+    );
+  }
+
+  /* --- Status pips --- */
+  .pip {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .pip-live {
+    background: var(--color-mint);
+    box-shadow: 0 0 0 0 rgba(88, 192, 138, 0.6);
+    animation: pip-pulse 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .pip-alarm {
+    background: var(--color-oxide);
+    animation: pip-alarm 0.9s steps(1, end) infinite;
+  }
+  .pip-idle {
+    background: var(--color-bone-faint);
+  }
+
+  @keyframes pip-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(88, 192, 138, 0.5);
+    }
+    70% {
+      box-shadow: 0 0 0 7px rgba(88, 192, 138, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(88, 192, 138, 0);
+    }
+  }
+  @keyframes pip-alarm {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0.15;
+    }
+  }
+
+  /* --- The call orb: the console's single large moving part --- */
+  .orb {
+    position: relative;
+    width: 128px;
+    height: 128px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(
+      circle at 50% 42%,
+      var(--color-ink-150),
+      var(--color-ink-000) 72%
+    );
+    border: 1px solid var(--color-line-lit);
+    transition:
+      border-color 420ms ease,
+      box-shadow 420ms ease;
+  }
+
+  .orb::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    transition: border-color 420ms ease;
+  }
+
+  .orb-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    opacity: 0;
+  }
+
+  .orb-listening {
+    border-color: var(--color-mint);
+    box-shadow:
+      0 0 34px -12px rgba(88, 192, 138, 0.55),
+      inset 0 0 26px -14px rgba(88, 192, 138, 0.5);
+    color: var(--color-mint);
+  }
+  .orb-listening .orb-ring {
+    animation: orb-emit 2.6s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  }
+  .orb-listening .orb-ring:nth-child(2) {
+    animation-delay: 0.85s;
+  }
+  .orb-listening .orb-ring:nth-child(3) {
+    animation-delay: 1.7s;
+  }
+
+  .orb-thinking {
+    border-color: var(--color-slate-signal);
+    box-shadow: 0 0 30px -14px rgba(110, 155, 209, 0.6);
+    color: var(--color-slate-signal);
+  }
+
+  .orb-speaking {
+    border-color: var(--color-amber);
+    box-shadow:
+      0 0 40px -10px rgba(255, 180, 84, 0.5),
+      inset 0 0 30px -16px rgba(255, 180, 84, 0.55);
+    color: var(--color-amber);
+  }
+
+  .orb-alarm {
+    border-color: var(--color-oxide);
+    box-shadow: 0 0 44px -8px rgba(255, 90, 82, 0.6);
+    color: var(--color-oxide);
+    animation: orb-alarm 1.1s ease-in-out infinite;
+  }
+
+  @keyframes orb-emit {
+    0% {
+      opacity: 0.5;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.55);
+    }
+  }
+  @keyframes orb-alarm {
+    0%,
+    100% {
+      box-shadow: 0 0 44px -8px rgba(255, 90, 82, 0.35);
+    }
+    50% {
+      box-shadow: 0 0 60px -4px rgba(255, 90, 82, 0.75);
+    }
+  }
+
+  /* --- Equalizer bars shown inside the orb while speaking --- */
+  .eq-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: currentColor;
+    animation: eq 900ms ease-in-out infinite;
+  }
+  @keyframes eq {
+    0%,
+    100% {
+      height: 8px;
+      opacity: 0.55;
+    }
+    50% {
+      height: 30px;
+      opacity: 1;
+    }
+  }
+
+  /* --- Transcript entrance --- */
+  .line-in {
+    animation: line-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes line-in {
+    from {
+      opacity: 0;
+      transform: translateY(7px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* --- Record fields stamp in when the agent writes to the eCRF --- */
+  .stamp-in {
+    animation: stamp-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes stamp-in {
+    0% {
+      opacity: 0;
+      transform: translateX(-8px);
+      border-left-color: var(--color-amber);
+    }
+    60% {
+      border-left-color: var(--color-amber);
+    }
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* --- Masthead reveal on load --- */
+  .rise {
+    animation: rise 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* --- Whole-console alarm state --- */
+  .chassis-alarm {
+    box-shadow: inset 0 0 0 1px rgba(255, 90, 82, 0.55);
+    animation: chassis-alarm 1.6s ease-in-out infinite;
+  }
+  @keyframes chassis-alarm {
+    0%,
+    100% {
+      box-shadow: inset 0 0 0 1px rgba(255, 90, 82, 0.3);
+    }
+    50% {
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 90, 82, 0.75),
+        inset 0 0 60px -30px rgba(255, 90, 82, 0.4);
+    }
+  }
+
+  /* --- Buttons --- */
+  .btn {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 0.7rem 1.4rem;
+    border: 1px solid var(--color-line-lit);
+    background: var(--color-ink-100);
+    color: var(--color-bone-dim);
+    transition:
+      color 180ms ease,
+      border-color 180ms ease,
+      background 180ms ease;
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-bone-faint);
+    background: var(--color-ink-150);
+  }
+  .btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    border-color: var(--color-amber-deep);
+    color: var(--color-amber);
+    background: var(--color-amber-ghost);
+  }
+  .btn-primary:hover:not(:disabled) {
+    border-color: var(--color-amber);
+    color: var(--color-ink-000);
+    background: var(--color-amber);
+  }
+  .btn-danger {
+    border-color: #5c2320;
+    color: var(--color-oxide);
+    background: var(--color-oxide-ghost);
+  }
+  .btn-danger:hover:not(:disabled) {
+    border-color: var(--color-oxide);
+    color: var(--color-ink-000);
+    background: var(--color-oxide);
+  }
+
+  .focus-ring:focus-visible {
+    outline: 1px solid var(--color-amber);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
