@@ -1,0 +1,689 @@
+{
+  "$comment": "Annotated evaluation corpus for the deterministic safety net. Each entry is an utterance a trial participant might plausibly speak, with the ground-truth urgency a human reviewer would assign. `kind` groups entries so the harness can report where the net is strong and where it is blind \u2014 that breakdown is the point of the corpus. Hand-authored against synthetic protocol ONX-301; no real participant speech.",
+  "utterances": [
+    {
+      "text": "I've had chest pain since last night and it's hard to breathe",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "there's a lot of pressure in my chest",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "I can't breathe when I walk to the kitchen",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been having trouble breathing since yesterday",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "my chest feels tight when I lie down",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "my chest is killing me",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "it feels like an elephant is sitting on my chest",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "there's a tightness across here when I walk to the mailbox",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I get winded just going to the bathroom now",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I have to stop halfway up the stairs to catch my breath",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "my heart's been racing and I feel like I might pass out",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "colloquial"
+    },
+    {
+      "text": "my face is drooping on one side",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been slurring my words since this morning",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "direct"
+    },
+    {
+      "text": "I can't move my arm properly",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "direct"
+    },
+    {
+      "text": "this is the worst headache of my life",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "direct"
+    },
+    {
+      "text": "the left side of my face feels funny and my smile looks crooked",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "colloquial"
+    },
+    {
+      "text": "my words are coming out wrong, my wife says I sound drunk",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "colloquial"
+    },
+    {
+      "text": "one of my hands has gone dead on me since breakfast",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've been thinking about killing myself",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "direct"
+    },
+    {
+      "text": "I don't want to live anymore",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "direct"
+    },
+    {
+      "text": "some days I'd be better off dead",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been having thoughts of hurting myself",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "direct"
+    },
+    {
+      "text": "I just don't see the point in any of this anymore",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've been thinking about not being around much longer",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "colloquial"
+    },
+    {
+      "text": "everyone would have an easier time without me here",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've stopped caring whether I wake up",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've been coughing up blood",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "direct"
+    },
+    {
+      "text": "there's bleeding that won't stop",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "direct"
+    },
+    {
+      "text": "I found blood in my stool this morning",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been throwing up blood since last night",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been coughing up something dark, almost like coffee grounds",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "colloquial"
+    },
+    {
+      "text": "the nosebleed went on for nearly an hour before it settled",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "colloquial"
+    },
+    {
+      "text": "there was a lot of red in the toilet this morning",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I passed out in the kitchen yesterday",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "direct"
+    },
+    {
+      "text": "I fainted getting out of bed",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "direct"
+    },
+    {
+      "text": "I had a seizure on Thursday",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "direct"
+    },
+    {
+      "text": "I keep nodding off and I can't stay awake at all",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I came to on the floor and I don't know how long I was there",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "colloquial"
+    },
+    {
+      "text": "everything went black for a moment when I stood up",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "colloquial"
+    },
+    {
+      "text": "my throat is swelling up",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "direct"
+    },
+    {
+      "text": "my lips are swelling and I feel strange",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "direct"
+    },
+    {
+      "text": "my skin is peeling off in sheets",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "direct"
+    },
+    {
+      "text": "I've got blisters in my mouth and my eyes are sore",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "direct"
+    },
+    {
+      "text": "my tongue feels too big for my mouth all of a sudden",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "colloquial"
+    },
+    {
+      "text": "the rash has turned into big raw patches that weep",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I was admitted to the hospital on Saturday",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "direct"
+    },
+    {
+      "text": "I ended up in the emergency room on Tuesday night",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "direct"
+    },
+    {
+      "text": "they called an ambulance for me",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been in the hospital since Thursday",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "direct"
+    },
+    {
+      "text": "they kept me in overnight for observation and fluids",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "colloquial"
+    },
+    {
+      "text": "my daughter drove me in and they put me on a drip for a few hours",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I spent Saturday night on a ward before they let me home",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've had a fever since Monday",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "direct"
+    },
+    {
+      "text": "I've been getting chills and shaking",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "direct"
+    },
+    {
+      "text": "my temperature was a hundred and two last night",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I've been burning up and then freezing, on and off all week",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I felt hot and clammy and couldn't get warm",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I think I'm pregnant",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "direct"
+    },
+    {
+      "text": "I missed my period this month",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "direct"
+    },
+    {
+      "text": "I took a test at home and it came back positive",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I stopped taking the study drug four days ago",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "direct"
+    },
+    {
+      "text": "I want to withdraw from the study",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "direct"
+    },
+    {
+      "text": "I quit taking the tablets last week",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "direct"
+    },
+    {
+      "text": "I've decided I'm done with the pills, they're not worth it",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "colloquial"
+    },
+    {
+      "text": "the bottle's been sitting in the cupboard since Monday",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "colloquial"
+    },
+    {
+      "text": "I'd rather come off this than keep feeling like that",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "colloquial"
+    },
+    {
+      "text": "no chest pain at all this week",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "negated"
+    },
+    {
+      "text": "I have no trouble breathing",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "negated"
+    },
+    {
+      "text": "no fever, no chills, nothing like that",
+      "expect": null,
+      "topic": "fever",
+      "kind": "negated"
+    },
+    {
+      "text": "I haven't had any bleeding",
+      "expect": null,
+      "topic": "bleeding",
+      "kind": "negated"
+    },
+    {
+      "text": "I've not passed out or anything like that",
+      "expect": null,
+      "topic": "loss_of_consciousness",
+      "kind": "negated"
+    },
+    {
+      "text": "no rash, my skin has been fine",
+      "expect": null,
+      "topic": "anaphylaxis_skin",
+      "kind": "negated"
+    },
+    {
+      "text": "I didn't go to the hospital, I managed at home",
+      "expect": null,
+      "topic": "hospitalization",
+      "kind": "negated"
+    },
+    {
+      "text": "I have not stopped taking the study drug",
+      "expect": null,
+      "topic": "withdrawal",
+      "kind": "negated"
+    },
+    {
+      "text": "no thoughts of hurting myself, nothing like that",
+      "expect": null,
+      "topic": "self_harm",
+      "kind": "negated"
+    },
+    {
+      "text": "I don't have a fever",
+      "expect": null,
+      "topic": "fever",
+      "kind": "negated"
+    },
+    {
+      "text": "my husband had chest pain last year but I'm fine",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "my wife was in the hospital last month, not me",
+      "expect": null,
+      "topic": "hospitalization",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "the doctor asked about chest pain but I've had none",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "my neighbour had a seizure and it frightened me",
+      "expect": null,
+      "topic": "loss_of_consciousness",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "my daughter has been running a fever all week",
+      "expect": null,
+      "topic": "fever",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "my brother stopped his medication and regretted it",
+      "expect": null,
+      "topic": "withdrawal",
+      "kind": "other_experiencer"
+    },
+    {
+      "text": "I had chest pain years ago before the study",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "historical"
+    },
+    {
+      "text": "I used to get fevers like that when I was younger",
+      "expect": null,
+      "topic": "fever",
+      "kind": "historical"
+    },
+    {
+      "text": "I was in the hospital a long time ago for my back",
+      "expect": null,
+      "topic": "hospitalization",
+      "kind": "historical"
+    },
+    {
+      "text": "I have a history of fainting, but not since I started",
+      "expect": null,
+      "topic": "loss_of_consciousness",
+      "kind": "historical"
+    },
+    {
+      "text": "I passed out once months ago, before joining the trial",
+      "expect": null,
+      "topic": "loss_of_consciousness",
+      "kind": "historical"
+    },
+    {
+      "text": "they told me to call if I get chest pain",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "hypothetical"
+    },
+    {
+      "text": "should I go to the hospital if this gets worse?",
+      "expect": null,
+      "topic": "hospitalization",
+      "kind": "hypothetical"
+    },
+    {
+      "text": "the nurse said to watch for a fever",
+      "expect": null,
+      "topic": "fever",
+      "kind": "hypothetical"
+    },
+    {
+      "text": "what happens if I stop taking the tablets?",
+      "expect": null,
+      "topic": "withdrawal",
+      "kind": "hypothetical"
+    },
+    {
+      "text": "I was told to look out for any bleeding",
+      "expect": null,
+      "topic": "bleeding",
+      "kind": "hypothetical"
+    },
+    {
+      "text": "I've been pretty tired this week",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "a little queasy but I'm still eating okay",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "my feet have been tingling, it's annoying but I manage",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "appetite is about the same as always",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "bowels have been normal, nothing unusual",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I took every dose, didn't miss any",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I started some Tylenol for a headache last week",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "sleep has been all right, better than last month",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "the rash on my arm has faded a lot",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I've been walking the dog most mornings",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "my daughter has been helping with the shopping",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I finished the chest painting project in the garage",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "the weather's been cold so I've stayed in",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I've had a bit of a dry mouth, that's about it",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "no complaints really, it's been a quiet week",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "my energy dipped mid week but it picked back up",
+      "expect": null,
+      "topic": "none",
+      "kind": "benign"
+    },
+    {
+      "text": "I've had this pain in my chest since last night and it's hard to breathe",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "there's a pain in my chest that comes and goes",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "it's hard to breathe when I lie flat",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "I'm struggling to breathe after walking to the door",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "direct"
+    },
+    {
+      "text": "no pain in my chest, nothing like that",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "negated"
+    },
+    {
+      "text": "my brother had a pain in his chest last month",
+      "expect": null,
+      "topic": "cardiac_respiratory",
+      "kind": "other_experiencer"
+    }
+  ]
+}
