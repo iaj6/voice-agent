@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+voice-samples/
+.speech-cache/
+.spike-logs/

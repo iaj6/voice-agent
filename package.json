@@ -3,15 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --turbopack -p 3100",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start -p 3100",
+    "lint": "eslint",
+    "test": "node --test \"tests/*.test.ts\"",
+    "warm-speech": "node scripts/warm-speech.mjs",
+    "measure-net": "node scripts/measure-net.mjs",
+    "eval": "node scripts/simulate.mjs",
+    "eval:fast": "node scripts/simulate.mjs --fast",
+    "eval:stability": "node scripts/simulate.mjs --fast --repeat=5",
+    "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@neondatabase/serverless": "^1.1.0",
     "next": "16.3.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
