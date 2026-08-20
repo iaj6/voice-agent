@@ -93,8 +93,10 @@ export interface CheckInSession {
    * and a check that cannot tell those apart from real speech is no check at all.
    */
   subjectUtterances: string[];
-  /** Verbatim writes refused as unfounded. A rising count means trouble. */
+  /** Distinct verbatim quotes refused as unfounded. A rising count means trouble. */
   provenanceRejections: number;
+  /** Fingerprints of refused quotes, so a retry is not counted twice. */
+  refusedQuotes: string[];
   adverseEvents: AdverseEventRecord[];
   safetyScreen: SafetyScreenRecord | null;
   adherence: AdherenceRecord | null;

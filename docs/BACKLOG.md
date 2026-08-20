@@ -153,10 +153,15 @@ produces it.*
 
 ---
 
-## Closed incident — fabricated content reaching the record
+## Narrowed incident — fabricated content reaching the record
 
-**Resolved 2026-08-20 by item 1.7.** Kept here because the reasoning is the useful
-part, not the outcome.
+**Mitigated 2026-08-20 by item 1.7, not closed.** The guard detects *invention* —
+words with no counterpart in the transcript. It is weaker against a quote that
+reuses the subject's own vocabulary to mean something they did not say. Two of
+those are handled (a dropped negation, a swapped body site or symptom term), but
+a determined inversion built only from spoken words can still pass. Coordinator
+review remains the actual backstop, and this item should be revisited alongside
+the MedDRA vocabulary work in Sprint 3.
 
 Observed during 1.2 verification, 2026-08-20. On the open-ended question turn, the agent
 generated a patient reply for itself, then **recorded an adverse event from its own
@@ -176,10 +181,18 @@ does not need to know why the model went wrong.
 
 Measured separation is wide — the fabricated Dizziness quote scores 0.00, genuine captures
 including heavily trimmed ones score 0.80 to 1.00 — so the 0.6 threshold sits in the middle
-of a gap rather than on an edge. All four verbatim writers are gated. Refusals are recorded
-in the audit trail rather than dropped, because a refused write is evidence the model tried
-to enter unfounded content, and three refusals escalate to a human: one is a slip, three
-means the conversation the agent believes it is having is not the one taking place.
+of a gap rather than on an edge. All four verbatim writers are gated.
+
+**It drops the quote, never the record.** The first version aborted the whole tool call,
+which discarded a red-flag screen answer whenever the agent's paraphrase of it scored badly
+and paged nobody — silently undoing the correction-escalation fix two commits earlier. The
+quote is the doubtful part; the structured answer beside it is still the subject's, and it
+is the part with a reporting clock attached.
+
+Refusals are written to the audit trail rather than dropped, because a refused quote is
+evidence the model tried to enter unfounded content. Three *distinct* refusals escalate —
+deduplicated by text, because the model retries a refused call and identical retries inside
+one turn used to page a coordinator about a call that was fine.
 
 Observed working in an eval run: the model fabricated an elaborate reply about headaches and
 vision loss, the gate refused the write, and the agent asked the subject to describe the
@@ -203,6 +216,7 @@ Append one line per sprint close: what shipped, what moved, what the gate said.
 
 | Date | Sprint | Outcome |
 |---|---|---|
+| 2026-08-20 | 1 | Second review of 1.7 found six more, one HIGH: the gate aborted the whole tool call, so a red-flag "yes" died with a loosely-quoted verbatim and nobody was paged — my own test locked it in. Now screens the field, not the record. Also: short quotes no longer bypass an empty transcript, scoring is per-utterance so a quote cannot be assembled from unrelated turns, a dropped negation is refused, a swapped body site is refused, plurals match singulars, and retries are deduplicated. 72 unit tests. |
 | 2026-08-20 | 1 | 1.7 done. Provenance gate on all four verbatim writers; refusals audited, three escalate. Fabrications score 0.00 against genuine captures at 0.80–1.00, so the 0.6 threshold sits in a wide gap. Also fixed all 11 code-review findings, two HIGH — ConText scopes crossed clause boundaries and suppressed four real emergencies; a screen answer corrected no→yes never escalated. lib/ converted to relative imports so the write path is testable without a build. 55 unit tests. |
 | 2026-08-20 | 1 | 1.1–1.3 done. Neon provisioned (free, iad1, auth off). Append-only enforced by trigger, verified: UPDATE and DELETE both rejected, cleanup required disabling them. **Postgres reorders JSONB keys**, which broke the hash chain on read-back — fixed with canonical serialisation, three tests added. SIGKILL mid-call then cold restart: subject, 1 AE, 3 escalations, 13 audit entries, chain valid — identical. **Observed a falsified eCRF entry** (see 1.7). |
 | 2026-08-20 | 0 | 0.1 and 0.5 done. `npm run verify` runs in ~3.3s and was proven to fail: removing two chest-pain patterns dropped sensitivity to 47.1% and the gate caught it. Floors set at sensitivity ≥50%, specificity =100%. |

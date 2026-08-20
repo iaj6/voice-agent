@@ -304,35 +304,47 @@ type Handler = (
 ) => ToolOutcome;
 
 /**
- * Refuses a verbatim quote that has no basis in what the subject said.
+ * Screens a verbatim quote, returning the value that may be stored.
  *
- * Returns null when the quote is grounded and the write may proceed. Otherwise
- * records the refusal in the audit trail — a rejected write is evidence the
- * model tried to enter unfounded content into a regulated record, and hiding it
- * would throw away the only signal that the call has gone wrong — and returns
- * the outcome the tool should hand back.
+ * **Drops the quote, never the record.** The first version of this returned an
+ * error and aborted the whole tool call, which meant a red-flag safety screen
+ * answer — "yes, I have had chest pain" — was thrown away whenever the agent's
+ * paraphrase of it scored badly, and no coordinator was paged. It silently
+ * undid the correction-escalation fix and locked the behaviour in with a test.
+ * A doubtful quote is a doubtful quote; the structured answer beside it is
+ * still the subject's, and it is the part with a reporting clock attached.
  *
- * Repeated refusals escalate. One is a slip; three means the conversation the
- * agent believes it is having is not the one taking place.
+ * A refusal is written to the audit trail rather than dropped — it is evidence
+ * the model tried to enter unfounded content, and it is the only signal that the
+ * conversation has gone wrong.
  */
 const PROVENANCE_ESCALATION_THRESHOLD = 3;
 
-function refuseUnfoundedQuote(
+function screenQuote(
   session: CheckInSession,
   field: string,
   quote: string | null | undefined,
   context: string,
-): ToolOutcome | null {
+): string | null {
   if (quote == null || quote.trim() === "") return null;
 
   const verdict = checkProvenance(quote, session.subjectUtterances);
-  if (verdict.grounded) return null;
+  if (verdict.grounded) return quote;
 
-  session.provenanceRejections += 1;
+  // Deduplicated by field and text: the model retries a refused call, and with
+  // MAX_TOOL_ITERATIONS at 8 three identical retries inside one turn used to
+  // cross the escalation threshold and page a coordinator about a call that was
+  // fine. Distinct fabrications still count separately.
+  const fingerprint = `${field}:${quote.trim().toLowerCase()}`;
+  const alreadySeen = session.refusedQuotes.includes(fingerprint);
+  if (!alreadySeen) {
+    session.refusedQuotes.push(fingerprint);
+    session.provenanceRejections += 1;
+  }
 
   session.audit.record({
     actor: "system",
-    action: "WRITE_REFUSED_UNFOUNDED",
+    action: "QUOTE_REFUSED_UNFOUNDED",
     entity: "Provenance",
     entityId: field,
     after: {
@@ -341,26 +353,26 @@ function refuseUnfoundedQuote(
       quote,
       score: verdict.score,
       unsupported: verdict.unsupported,
-      subjectUtteranceCount: session.subjectUtterances.length,
-      rejectionsThisCall: session.provenanceRejections,
+      reason: verdict.reason,
+      repeat: alreadySeen,
+      distinctRefusalsThisCall: session.provenanceRejections,
     },
     reason:
-      "Verbatim text was refused because it does not appear in anything the " +
-      "subject said on this call. No clinical record was written.",
+      "Verbatim text was refused because it does not appear in what the subject " +
+      "said. The quote was dropped; any structured data in the same call was kept.",
   });
 
-  const escalate =
+  if (
     session.provenanceRejections >= PROVENANCE_ESCALATION_THRESHOLD &&
-    !session.escalations.some((e) => e.category === "Unfounded record content");
-
-  if (escalate) {
+    !session.escalations.some((e) => e.category === "Unfounded record content")
+  ) {
     const record = {
       id: nextEscalationId(session),
       urgency: "urgent" as const,
       reason:
-        `${session.provenanceRejections} attempts to record content the subject ` +
-        "never said. This check-in is not trustworthy and needs a human to review " +
-        "the call before any of it is used.",
+        `${session.provenanceRejections} distinct attempts to record content the ` +
+        "subject never said. This check-in is not trustworthy and needs a human to " +
+        "review the call before any of it is used.",
       relatedEventIds: [],
       triggeredBy: "safety_net" as const,
       category: "Unfounded record content",
@@ -378,25 +390,11 @@ function refuseUnfoundedQuote(
       entityId: record.id,
       after: record,
       reason:
-        "Repeated unfounded write attempts. Deterministic, independent of model " +
-        "judgment.",
+        "Repeated unfounded quotes. Deterministic, independent of model judgment.",
     });
   }
 
-  return {
-    result: {
-      error: `Refused: ${verdict.reason}`,
-      field,
-      instruction:
-        "Nothing was recorded. Quote only what the subject actually said. If you " +
-        "are unsure what they said, ask them again rather than reconstructing it — " +
-        "a gap in the record is recoverable, an invented quote is not." +
-        (escalate
-          ? " A coordinator has been alerted that this call may be unreliable."
-          : ""),
-    },
-    isError: true,
-  };
+  return null;
 }
 
 const handlers: Record<string, Handler> = {
@@ -481,13 +479,14 @@ const handlers: Record<string, Handler> = {
       };
     }
 
-    const screenRefusal = refuseUnfoundedQuote(
+    // The quote is screened; the ANSWER is not discarded with it. A red-flag
+    // "yes" is the field with a reporting clock attached.
+    const screenedVerbatim = screenQuote(
       session,
       "verbatim",
       input.verbatim as string | null,
       `record_safety_screen_item:${itemId}`,
     );
-    if (screenRefusal) return screenRefusal;
 
     const answer =
       input.answer === null || input.answer === undefined
@@ -497,7 +496,7 @@ const handlers: Record<string, Handler> = {
     const record = {
       itemId,
       answer,
-      verbatim: input.verbatim == null ? null : String(input.verbatim),
+      verbatim: screenedVerbatim,
       answeredAt: new Date().toISOString(),
     };
 
@@ -604,13 +603,12 @@ const handlers: Record<string, Handler> = {
       };
     }
 
-    const refusal = refuseUnfoundedQuote(
+    const verbatimTerm = screenQuote(
       session,
       "verbatim_term",
       input.verbatim_term as string | null,
       "record_adverse_event",
     );
-    if (refusal) return refusal;
 
     const codedTerm = String(input.coded_term ?? "").trim();
 
@@ -638,7 +636,9 @@ const handlers: Record<string, Handler> = {
 
     const record = {
       id: existing?.id ?? nextEventId(session),
-      verbatimTerm: String(input.verbatim_term ?? ""),
+      // Null when the quote was refused. A coordinator sees an event with no
+      // verbatim rather than an event with an invented one.
+      verbatimTerm: verbatimTerm ?? "",
       codedTerm,
       onsetDescription: String(input.onset_description ?? ""),
       ongoing: Boolean(input.ongoing),
@@ -768,17 +768,14 @@ const handlers: Record<string, Handler> = {
   },
 
   record_adherence(session, input) {
-    const adherenceRefusal = refuseUnfoundedQuote(
+    const missed = Number(input.doses_missed ?? 0);
+    // doses_missed is structured data and survives a doubtful reason.
+    const reason = screenQuote(
       session,
       "reason_verbatim",
       input.reason_verbatim as string | null,
       "record_adherence",
     );
-    if (adherenceRefusal) return adherenceRefusal;
-
-    const missed = Number(input.doses_missed ?? 0);
-    const reason =
-      input.reason_verbatim == null ? null : String(input.reason_verbatim);
     const before = session.adherence;
     session.adherence = {
       dosesMissedSinceLastCheckIn: missed,
@@ -807,18 +804,19 @@ const handlers: Record<string, Handler> = {
   },
 
   record_concomitant_medication(session, input) {
-    const conMedRefusal = refuseUnfoundedQuote(
+    // The drug name and start date are what an interaction check needs; losing
+    // them because the stated reason was loosely quoted has no clinical basis.
+    const indication = screenQuote(
       session,
       "indication_verbatim",
       input.indication_verbatim as string | null,
       "record_concomitant_medication",
     );
-    if (conMedRefusal) return conMedRefusal;
 
     const record = {
       id: nextConMedId(session),
       name: String(input.name ?? ""),
-      indicationVerbatim: String(input.indication_verbatim ?? ""),
+      indicationVerbatim: indication ?? "",
       startedDescription: String(input.started_description ?? ""),
       recordedAt: new Date().toISOString(),
     };

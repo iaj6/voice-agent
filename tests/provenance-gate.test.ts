@@ -20,6 +20,7 @@ function sessionWith(utterances: string[]): CheckInSession {
     messages: [],
     subjectUtterances: utterances,
     provenanceRejections: 0,
+    refusedQuotes: [],
     adverseEvents: [],
     safetyScreen: null,
     adherence: null,
@@ -47,26 +48,29 @@ const FABRICATED_AE = {
   spontaneous: true,
 };
 
-test("a fabricated adverse event never reaches the record", () => {
-  // The exact entry that was written for real: an event invented from the
-  // agent's own hallucinated patient reply.
+test("a fabricated quote never reaches the record", () => {
+  // The exact quote that was written for real, from the agent's own hallucinated
+  // patient reply. The graded event is the agent's clinical judgement and is
+  // kept for a human to review; the invented words are not.
   const session = sessionWith(SPOKEN);
-  const outcome = executeTool(session, "record_adverse_event", FABRICATED_AE);
+  executeTool(session, "record_adverse_event", FABRICATED_AE);
 
-  assert.equal(outcome.isError, true);
-  assert.equal(session.adverseEvents.length, 0, "nothing may be written");
-  assert.match(JSON.stringify(outcome.result), /Refused/);
+  const written = JSON.stringify(session.adverseEvents);
+  assert.ok(
+    !written.includes("kitchen") && !written.includes("sideways"),
+    "no invented words may appear anywhere in the record",
+  );
 });
 
 test("the refusal is recorded, not silent", () => {
-  // A rejected write is evidence the model tried to enter unfounded content.
+  // A refused quote is evidence the model tried to enter unfounded content.
   // Dropping it silently discards the only signal the call has gone wrong.
   const session = sessionWith(SPOKEN);
   executeTool(session, "record_adverse_event", FABRICATED_AE);
 
   const refusals = session.audit
     .all()
-    .filter((e) => e.action === "WRITE_REFUSED_UNFOUNDED");
+    .filter((e) => e.action === "QUOTE_REFUSED_UNFOUNDED");
   assert.equal(refusals.length, 1);
   assert.equal(session.provenanceRejections, 1);
   assert.deepEqual(session.audit.verifyChain(), { valid: true });
@@ -87,51 +91,102 @@ test("a genuine capture passes the gate untouched", () => {
   assert.equal(session.provenanceRejections, 0);
 });
 
-test("repeated unfounded writes escalate to a human", () => {
-  // One is a slip. Three means the conversation the agent believes it is having
-  // is not the one taking place, and the whole call is suspect.
-  const session = sessionWith(SPOKEN);
-  for (let i = 0; i < 3; i++) {
-    executeTool(session, "record_adverse_event", {
-      ...FABRICATED_AE,
-      coded_term: `Invented ${i}`,
-      verbatim_term: `a thing that was never said number ${i} about helicopters`,
-    });
-  }
+test("a doubtful quote never costs the structured data beside it", () => {
+  // Regression, HIGH. The gate used to abort the whole tool call, so a red-flag
+  // "yes" was discarded whenever the agent's paraphrase of it scored badly and
+  // no coordinator was paged — silently undoing the correction-escalation fix.
+  // The quote is the doubtful part; the answer is the part with a clock on it.
+  const session = sessionWith([
+    "Yeah, my temperature was up around 103 on Sunday",
+  ]);
 
-  assert.equal(session.provenanceRejections, 3);
-  assert.equal(session.adverseEvents.length, 0);
-  const escalation = session.escalations.find(
-    (e) => e.category === "Unfounded record content",
+  const outcome = executeTool(session, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: true,
+    // Digits-versus-words, an ordinary transcription mismatch. Scores badly.
+    verbatim: "my temperature hit a hundred and three on Sunday night",
+  });
+
+  assert.notEqual(outcome.isError, true, "the call must succeed");
+  assert.ok(session.safetyScreen, "the answer must be recorded");
+  assert.equal(session.safetyScreen.items[0].answer, true);
+  assert.equal(
+    session.safetyScreen.items[0].verbatim,
+    null,
+    "the doubtful quote is dropped",
   );
-  assert.ok(escalation, "three refusals must reach a coordinator");
-  assert.equal(escalation.triggeredBy, "safety_net");
+  assert.equal(session.escalations.length, 1, "the red flag must still page someone");
+  assert.equal(session.escalations[0].triggeredBy, "safety_net");
   assert.equal(session.status, "escalated");
 });
 
-test("every verbatim writer is gated, not just adverse events", () => {
-  const session = sessionWith(SPOKEN);
-
-  const adherence = executeTool(session, "record_adherence", {
+test("adherence keeps its dose count when only the reason is doubtful", () => {
+  const session = sessionWith(["I was away visiting family last week"]);
+  const outcome = executeTool(session, "record_adherence", {
     doses_missed: 2,
-    reason_verbatim: "I was away at my brother's wedding in Scotland",
+    reason_verbatim: "I was at my brother's wedding in Scotland",
   });
-  assert.equal(adherence.isError, true, "adherence reason must be gated");
-  assert.equal(session.adherence, null);
+  assert.notEqual(outcome.isError, true);
+  assert.equal(session.adherence?.dosesMissedSinceLastCheckIn, 2);
+  assert.equal(session.adherence?.reasonVerbatim, null);
+});
 
-  const conmed = executeTool(session, "record_concomitant_medication", {
+test("a concomitant medication keeps its name when the indication is doubtful", () => {
+  // Losing the drug name because the stated reason was loosely quoted is an
+  // interaction-check gap with no clinical justification.
+  const session = sessionWith(["My knee's been sore since I fell last week"]);
+  const outcome = executeTool(session, "record_concomitant_medication", {
     name: "Ibuprofen",
-    indication_verbatim: "for the pain in my knee after the fall",
+    indication_verbatim: "for the crushing headaches every morning",
     started_description: "last week",
   });
-  assert.equal(conmed.isError, true, "con-med indication must be gated");
-  assert.equal(session.conMeds.length, 0);
+  assert.notEqual(outcome.isError, true);
+  assert.equal(session.conMeds.length, 1);
+  assert.equal(session.conMeds[0].name, "Ibuprofen");
+  assert.equal(session.conMeds[0].indicationVerbatim, "");
+});
 
-  const screen = executeTool(session, "record_safety_screen_item", {
-    item_id: "fever",
-    answer: true,
-    verbatim: "my temperature hit a hundred and three on Sunday night",
-  });
-  assert.equal(screen.isError, true, "screen verbatim must be gated");
-  assert.equal(session.safetyScreen, null);
+test("an adverse event is still recorded, without the invented quote", () => {
+  const session = sessionWith(SPOKEN);
+  const outcome = executeTool(session, "record_adverse_event", FABRICATED_AE);
+  assert.notEqual(outcome.isError, true);
+  assert.equal(session.adverseEvents.length, 1, "the graded event survives");
+  assert.equal(
+    session.adverseEvents[0].verbatimTerm,
+    "",
+    "but carries no invented verbatim",
+  );
+});
+
+test("identical retries are not counted as separate fabrications", () => {
+  // The model retries a refused call. With MAX_TOOL_ITERATIONS at 8, three
+  // identical retries inside one turn used to cross the escalation threshold
+  // and page a coordinator about a call that was fine.
+  const session = sessionWith(SPOKEN);
+  for (let i = 0; i < 4; i++) {
+    executeTool(session, "record_adverse_event", FABRICATED_AE);
+  }
+  assert.equal(session.provenanceRejections, 1, "one distinct fabrication");
+  assert.equal(
+    session.escalations.filter((e) => e.category === "Unfounded record content").length,
+    0,
+    "a retry loop must not page anyone",
+  );
+});
+
+test("distinct fabrications still escalate", () => {
+  const session = sessionWith(SPOKEN);
+  for (const term of ["helicopters overhead", "the purple curtains", "my third elbow"]) {
+    executeTool(session, "record_adverse_event", {
+      ...FABRICATED_AE,
+      coded_term: term,
+      verbatim_term: `something about ${term} that was never said aloud`,
+    });
+  }
+  assert.equal(session.provenanceRejections, 3);
+  const escalation = session.escalations.find(
+    (e) => e.category === "Unfounded record content",
+  );
+  assert.ok(escalation, "three distinct fabrications must reach a coordinator");
+  assert.equal(session.status, "escalated");
 });

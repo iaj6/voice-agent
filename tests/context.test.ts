@@ -215,7 +215,7 @@ test("refuses a quote with no basis in the transcript", () => {
   );
   assert.equal(v.grounded, false);
   assert.equal(v.score, 0);
-  assert.match(v.reason ?? "", /appears in what the subject actually said/);
+  assert.match(v.reason ?? "", /appears in any single thing the subject said/);
 });
 
 test("accepts a genuine capture, including a trimmed one", () => {
@@ -232,11 +232,109 @@ test("accepts a genuine capture, including a trimmed one", () => {
   }
 });
 
-test("short answers are not judged", () => {
-  // "Yes" / "None" / "about eight" carry clinical meaning and cannot be scored.
-  for (const quote of ["yes", "none", "about eight"]) {
-    assert.equal(checkProvenance(quote, ["No, none at all."]).grounded, true);
+test("a short quote must match completely", () => {
+  // verbatim_term is by nature a short symptom phrase, so exempting short quotes
+  // left the exact field the closed incident concerned still admitting brief
+  // fabrications. They are held to a full match instead.
+  const spoken = ["I've had dizzy spells when I stand up too fast"];
+  assert.equal(checkProvenance("dizzy spells", spoken).grounded, true);
+  assert.equal(checkProvenance("chest pain", spoken).grounded, false);
+});
+
+test("a short quote is not exempt from an empty transcript", () => {
+  // Previously the short-quote exemption ran BEFORE the empty-transcript check,
+  // so a brief invention passed even when the subject had said nothing.
+  for (const quote of ["dizzy spells", "pins and needles", "the shakes"]) {
+    assert.equal(checkProvenance(quote, []).grounded, false, `admitted: ${quote}`);
   }
+});
+
+test("pure stopword answers carry no evidential content", () => {
+  // "Yes" / "None" cannot be scored and must not be refused.
+  assert.equal(checkProvenance("yes", ["No, none at all."]).grounded, true);
+  assert.equal(checkProvenance("none", ["No, none at all."]).grounded, true);
+});
+
+test("a quote that drops the subject's negation is refused", () => {
+  // Word overlap alone scores this 1.00 — the quote reuses every word and
+  // reverses the meaning.
+  const v = checkProvenance("I have had chest pain this week", [
+    "No, I have not had any chest pain this week",
+  ]);
+  assert.equal(v.grounded, false);
+  assert.match(v.reason ?? "", /denied|negation/i);
+});
+
+test("a negation elsewhere in the sentence does not block a genuine quote", () => {
+  // "I have no appetite AND I've been vomiting blood" legitimately yields the
+  // second clause. A blunt negation-word count would refuse it; ConText's
+  // clause handling is what tells them apart.
+  assert.equal(
+    checkProvenance("I've been vomiting blood", [
+      "I have no appetite and I've been vomiting blood",
+    ]).grounded,
+    true,
+  );
+});
+
+test("a quote cannot be assembled from unrelated turns", () => {
+  // Pooling every utterance let a quote borrow words from turns that between
+  // them contained the vocabulary and none of the meaning.
+  const v = checkProvenance("I felt chest pain on Tuesday", [
+    "I took ibuprofen for my knee",
+    "My chest is fine",
+    "I felt pain in my knee on Tuesday",
+  ]);
+  assert.equal(v.grounded, false);
+});
+
+test("a quote grounded in one turn passes even when the call spans several", () => {
+  // Scoring is per-utterance, never pooled. This one clears the threshold on the
+  // second utterance alone, which is the honest reading: those words were said,
+  // together, in one breath.
+  assert.equal(
+    checkProvenance("could not shower Tuesday", [
+      "I've been very tired this week",
+      "I could not shower Tuesday",
+    ]).grounded,
+    true,
+  );
+});
+
+test("swapping a body site is refused however well the rest overlaps", () => {
+  // Word overlap alone scores this 0.75 — one word differs and it is the only
+  // one that matters.
+  const v = checkProvenance("I felt chest pain on Tuesday", [
+    "I felt pain in my knee on Tuesday",
+  ]);
+  assert.equal(v.grounded, false);
+  assert.match(v.reason ?? "", /chest/);
+});
+
+test("salient words present in the source are fine", () => {
+  assert.equal(
+    checkProvenance("I've been vomiting blood", [
+      "I have no appetite and I've been vomiting blood",
+    ]).grounded,
+    true,
+  );
+});
+
+test("a word matches its own plural", () => {
+  // One-directional stemming turned "headaches" into "headach" while "headache"
+  // stayed itself, so these scored 0.00 and were refused.
+  assert.equal(
+    checkProvenance("headaches doses nurses bruises", [
+      "headache dose nurse bruise",
+    ]).grounded,
+    true,
+  );
+  assert.equal(
+    checkProvenance("the nurses gave me doses of the rescue medicine", [
+      "The nurse gave me a dose of the rescue medicine",
+    ]).grounded,
+    true,
+  );
 });
 
 test("nothing is quotable before the subject has spoken", () => {
@@ -245,12 +343,3 @@ test("nothing is quotable before the subject has spoken", () => {
   assert.match(v.reason ?? "", /has not said anything yet/);
 });
 
-test("the synthetic call-start turn is not quotable", () => {
-  // It is our text, not the subject's. Quoting it back would be fabrication
-  // dressed as transcription.
-  const v = checkProvenance(
-    "The call has connected and the subject has not spoken yet",
-    [],
-  );
-  assert.equal(v.grounded, false);
-});
