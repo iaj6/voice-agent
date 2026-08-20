@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Blocks a push when the gate is red, and reminds about review.
+#
+# Enabled by `git config core.hooksPath .githooks`, which npm run prepare does.
+# Lives in the repository rather than .git/hooks so it travels with a clone.
+#
+# The gate is enforceable because it is a command. Code review is not — it needs
+# judgement — so this asks rather than blocks. The Claude Code hook in
+# .claude/settings.json does the enforcing on that side.
+
+set -e
+
+printf '\n\033[1mpre-push\033[0m\n'
+
+if ! npm run --silent verify; then
+  printf '\n\033[38;5;203m  push blocked: the gate is red\033[0m\n'
+  printf '  Fix it, or push with --no-verify if you know why you are doing that.\n\n'
+  exit 1
+fi
+
+printf '\n  \033[90mReview check — has this diff been through /code-review?\033[0m\n'
+printf '  \033[90mSee docs/CODE_REVIEW.md for what this codebase gets wrong repeatedly.\033[0m\n\n'

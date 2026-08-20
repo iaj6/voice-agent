@@ -13,7 +13,8 @@
     "eval": "node scripts/simulate.mjs",
     "eval:fast": "node scripts/simulate.mjs --fast",
     "eval:stability": "node scripts/simulate.mjs --fast --repeat=5",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
