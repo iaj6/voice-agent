@@ -60,10 +60,10 @@ gap more expensive to close.
 | 1.1 | Session store behind a persistence interface | A | Existing tests pass unchanged against the new backing | **done** |
 | 1.2 | Database-backed implementation | A | Kill the server mid-call; the session resumes intact | **done** |
 | 1.3 | Audit trail persisted append-only | B | Chain verifies across a restart; no update path exists in the schema | **done — needs review** |
-| 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | **done — needs review** |
-| 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | **done — needs review** |
+| 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | **done** |
+| 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | **done** |
 | 1.6 | Retention and legal-hold posture documented | C | Reviewed | todo |
-| 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **done — needs review** |
+| 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **done** |
 | 1.8 | Versioned migrations | A | Schema changes are ordered and replayable, not idempotent DDL | todo |
 
 ---
@@ -153,6 +153,41 @@ produces it.*
 
 ---
 
+## Open defect — the agent stacks questions and part-fabricates a turn
+
+**Measured 2026-08-20. Pre-existing; present identically before and after the
+1.4/1.5 review fixes, so this is not a regression from them.**
+
+`emergency` persona, `--repeat=6`: **2/6 rounds clean, on both sides of the diff.**
+The failing turns look like this:
+
+> *"Thank you. And what is your date of birth? Sorry, could you tell me your date of…"*
+
+and, in the worst round observed, a single agent turn containing the whole rest of
+the call — its question, the subject's answer, its reply, another question, another
+answer. **Nothing the subject "said" in that turn passed through the deterministic
+safety net, because the subject never said it.** That round recorded two adverse
+events and the net never fired.
+
+This was invisible until now. The eval's `did not fabricate subject speech` check
+matches `user:` / `subject:` style role labels, and this fabrication carries no
+labels at all — it is flowing prose. The check reported *clean* on a transcript
+full of invented subject speech. Two instrument fixes went in alongside this
+entry: an `asked one question per turn` assertion, which encodes a rule the system
+prompt already states and catches the stacked-question form directly, and
+`--repeat` now prints a round that actually failed instead of whichever ran last
+(it was reporting a rate over a passing transcript, so the defect could only be
+seen by re-running until it landed in the final round).
+
+Not yet diagnosed: whether the extra iteration comes from `stop_reason:
+"stop_sequence"` being treated as a continuable turn. Stop sequences are catching
+the fabrication — that part works — but the turn appears to resume afterwards
+rather than ending and waiting for the subject. **Sprint 3 candidate, and it
+outranks coverage work: this is the failure mode item 1.7 exists to contain, and
+it is still live.**
+
+---
+
 ## Narrowed incident — fabricated content reaching the record
 
 **Mitigated 2026-08-20 by item 1.7, not closed.** The guard detects *invention* —
@@ -216,6 +251,7 @@ Append one line per sprint close: what shipped, what moved, what the gate said.
 
 | Date | Sprint | Outcome |
 |---|---|---|
+| 2026-08-20 | 1 | Third review of 1.4/1.5 found 11, one HIGH, and it was real: resume decided a call was "dropped" from the absence of `completedAt` alone, so a subject redialling while still connected on the first line had the live call closed under them — and `save()` resolved quietly while it happened. Claiming now requires idleness and happens in one leasing UPDATE, so a concurrent redial skips the row instead of carrying the same record forward twice. The memory store was handing out live references: an emergency recorded on one session appeared inside another that was already locked, with nothing in that record's audit trail to say where it came from. **The Postgres SQL had never been executed by a test** — every suite deleted `DATABASE_URL` — so the memory-store tests were asserting a reimplementation of the control rather than the control. Now covered against a scratch database created and dropped per run, and both SQL controls mutation-tested. 98 unit tests. |
 | 2026-08-20 | 1 | 1.4 and 1.5 done. A redial within 2h carries the dropped call's record forward, locks the source so nothing is claimed twice, and brings prior speech so the provenance gate still allows quoting it. Idempotency is on natural keys, not caller-supplied ones — a redialling agent has no memory of a key it generated on the first call. Found and fixed cross-run contamination in the eval harness: personas that stop mid-call looked exactly like dropped lines to the next run. 81 unit tests. |
 | 2026-08-20 | 1 | Second review of 1.7 found six more, one HIGH: the gate aborted the whole tool call, so a red-flag "yes" died with a loosely-quoted verbatim and nobody was paged — my own test locked it in. Now screens the field, not the record. Also: short quotes no longer bypass an empty transcript, scoring is per-utterance so a quote cannot be assembled from unrelated turns, a dropped negation is refused, a swapped body site is refused, plurals match singulars, and retries are deduplicated. 72 unit tests. |
 | 2026-08-20 | 1 | 1.7 done. Provenance gate on all four verbatim writers; refusals audited, three escalate. Fabrications score 0.00 against genuine captures at 0.80–1.00, so the 0.6 threshold sits in a wide gap. Also fixed all 11 code-review findings, two HIGH — ConText scopes crossed clause boundaries and suppressed four real emergencies; a screen answer corrected no→yes never escalated. lib/ converted to relative imports so the write path is testable without a build. 55 unit tests. |

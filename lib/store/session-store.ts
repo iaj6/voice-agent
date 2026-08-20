@@ -37,6 +37,17 @@ export interface SessionStore {
   ): Promise<CheckInSession | null>;
   /** Marks a claimed session closed once its record has been carried forward. */
   supersede(session: CheckInSession, successorId: string): Promise<void>;
+  /**
+   * Marks a session as still live, without writing its record.
+   *
+   * Idleness was measured from the last *write*, and a turn only writes after a
+   * tool batch or at its end — nothing is written while the subject is speaking
+   * or thinking. A tired participant who put the phone down to go and find their
+   * pill bottle looked exactly like a dropped call, and a second inbound leg
+   * could then supersede the one they were still on. Called as speech arrives,
+   * so silence on an open line is not mistaken for absence.
+   */
+  touch(id: string): Promise<void>;
 }
 
 /** How long after a drop a redial still counts as the same check-in. */
@@ -199,6 +210,13 @@ class MemorySessionStore implements SessionStore {
   }
 
   async supersede(session: CheckInSession, successorId: string): Promise<void> {
+    const stored = this.sessions.get(session.id);
+    if (stored && stored.completedAt !== null) {
+      throw new Error(
+        `Session ${session.id} was already closed; it was not superseded by ` +
+          `${successorId}. Its record was not carried forward twice.`,
+      );
+    }
     session.completedAt = new Date().toISOString();
     session.status = session.status === "escalated" ? "escalated" : "completed";
     session.summary =
@@ -206,6 +224,13 @@ class MemorySessionStore implements SessionStore {
       ` [Interrupted; record carried forward into session ${successorId}.]`;
     session.updatedAt = new Date().toISOString();
     this.sessions.set(session.id, detach(session));
+  }
+
+  async touch(id: string): Promise<void> {
+    const stored = this.sessions.get(id);
+    if (stored && stored.completedAt === null) {
+      stored.updatedAt = new Date().toISOString();
+    }
   }
 
   /** See __backdateForTest. */
@@ -314,16 +339,25 @@ class PostgresSessionStore implements SessionStore {
     }
 
     if (existing[0].completed_at !== null) {
-      await this.appendAudit(session);
-
       // Locked by us, via complete_check_in: conversation after the record
-      // closes is not part of it, so declining to write is correct.
-      if (session.completedAt !== null) return;
+      // closes is not part of it, so declining to write the record is correct —
+      // but our own closing entries still belong on the trail.
+      if (session.completedAt !== null) {
+        await this.appendAudit(session);
+        return;
+      }
 
       // Locked by something else while this call was still running — a redial
       // that claimed it as dropped, most likely. Everything written since is
       // gone. Silence here was the quiet data-loss path that save() was
       // rewritten to eliminate; it must not come back through this door.
+      //
+      // Nothing is appended on this path. Appending first meant the trail
+      // recorded writes the database had just refused: a record would carry an
+      // AE_RECORDED entry with no adverse event anywhere in it. The chain still
+      // verified, because every entry was individually well-formed — the record
+      // simply disagreed with its own audit trail, which is precisely the
+      // failure the trail exists to make impossible.
       throw new Error(
         `Session ${session.id} was closed by another process while this call was ` +
           "still in progress. Writes since then were not saved.",
@@ -349,12 +383,17 @@ class PostgresSessionStore implements SessionStore {
     excludeId: string,
   ): Promise<CheckInSession | null> {
     const sql = getDb();
-    const ageCutoff = new Date(Date.now() - RESUME_WINDOW_MS).toISOString();
-    const idleCutoff = new Date(Date.now() - RESUME_IDLE_MS).toISOString();
 
     // One statement: select and lease together. Bumping updated_at makes the row
     // non-idle, so a concurrent redial skips it instead of carrying the same
     // record forward a second time.
+    //
+    // Both cutoffs are computed by the database, not by this process. They are
+    // compared against created_at and updated_at, which the database writes with
+    // its own now() — mixing in the application server's clock meant a few
+    // seconds of skew decided whether a call counted as live. Ahead, and a call
+    // that saved 85 seconds ago reads as idle and gets locked mid-sentence;
+    // behind, and genuinely dropped calls become unclaimable. One clock.
     const claimed = (await sql`
       update check_in_session
          set updated_at = now()
@@ -364,8 +403,8 @@ class PostgresSessionStore implements SessionStore {
             and completed_at is null
             and coalesce((record ->> 'resumable')::boolean, true)
             and id <> ${excludeId}
-            and created_at >= ${ageCutoff}
-            and updated_at <= ${idleCutoff}
+            and created_at >= now() - (${String(RESUME_WINDOW_MS)} || ' milliseconds')::interval
+            and updated_at <= now() - (${String(RESUME_IDLE_MS)} || ' milliseconds')::interval
           order by created_at desc
           limit 1
           for update skip locked
@@ -382,15 +421,36 @@ class PostgresSessionStore implements SessionStore {
       (session.summary ?? "") +
       ` [Interrupted; record carried forward into session ${successorId}.]`;
     const status = session.status === "escalated" ? "escalated" : "completed";
-    await sql`
+    const closed = (await sql`
       update check_in_session
          set completed_at = now(), status = ${status}, summary = ${summary},
              updated_at = now()
-       where id = ${session.id} and completed_at is null`;
+       where id = ${session.id} and completed_at is null
+      returning id`) as { id: string }[];
+
+    // Zero rows means someone else closed it first. Reporting success anyway
+    // told the caller the source was locked when it was still open, so the same
+    // record could be carried forward a second time.
+    if (closed.length === 0) {
+      throw new Error(
+        `Session ${session.id} was already closed; it was not superseded by ` +
+          `${successorId}. Its record was not carried forward twice.`,
+      );
+    }
+
     session.completedAt = new Date().toISOString();
     session.status = status;
     session.summary = summary;
     await this.appendAudit(session);
+  }
+
+  async touch(id: string): Promise<void> {
+    const sql = getDb();
+    // `completed_at is null` is not just correctness: the lock trigger raises on
+    // any update to a closed row, so touching one would throw.
+    await sql`
+      update check_in_session set updated_at = now()
+       where id = ${id} and completed_at is null`;
   }
 
   /** Inserts only entries not already persisted. The table rejects rewrites. */

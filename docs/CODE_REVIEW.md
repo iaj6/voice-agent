@@ -21,12 +21,25 @@ repository and was caught by running something rather than by reading a diff.
 
 ### 1. A safety control gets weaker as a side effect
 
-The recurring failure. Twice now an improvement quietly degraded a control:
+The recurring failure, and the one to assume is present. Every round of review so far
+has found another instance:
 
 - ConText negation, added to cut false positives, **double-negated the negation-bearing
   idioms** — "I don't want to live anymore", "I can't breathe" — and disarmed the
   highest-stakes rules in the system.
+- ConText scopes then ran past clause boundaries and suppressed four real emergencies.
 - Editing regex patterns for one reason dropped recall on a topic nobody was looking at.
+- The provenance gate, added to stop fabricated verbatims, **aborted the whole tool
+  call** — so a red-flag "yes" died along with its loosely-quoted verbatim and nobody
+  was paged. It undid the escalation fix from two commits earlier, and a test written in
+  the same commit locked the regression in.
+- Resume, added so a dropped call is not lost, closed calls that had not dropped: it read
+  an open record as an abandoned one, so a subject redialling while still connected on
+  the first line had the live call locked under them mid-sentence.
+
+Three of those five were introduced *by a fix to a different control*. The pattern is not
+carelessness — it is that a control's failure mode is usually invisible from the diff that
+breaks it.
 
 **Ask:** does this change alter what the safety net catches? If you cannot answer from
 the diff, run `npm run measure-net` before and after. The gate holds a sensitivity floor
@@ -41,10 +54,21 @@ and say why in the commit.
   a colour helper that did not exist.
 - The audit chain verified perfectly in memory and broke on the first read back from
   Postgres, because **Postgres reorders JSONB keys**.
+- The resume suite read as thorough and had **never executed the SQL it was about**.
+  Every test deleted `DATABASE_URL` to force the in-memory store, so the leasing
+  statement that stops a redial locking a live call, and both append-only triggers, were
+  asserted only in their JavaScript reimplementation. The tests passed either way.
+- The in-memory store handed out live references, so two "separate" sessions shared
+  structure. The isolation tests were weaker than they read.
 
 **Ask:** what would this look like if it were broken? If the answer is "the same", the
 check is not a check. Negative assertions especially need a positive control alongside
 them.
+
+**And ask:** does this test reach the thing it is named after? A test that substitutes a
+convenient double for the control under test is measuring the double. Where a rule lives
+in SQL, in a trigger, or in the platform, the test has to get there — and the cheapest
+proof that it did is to break the rule on purpose and watch the test fail.
 
 ### 3. A design gives the model something to gain from fabricating
 

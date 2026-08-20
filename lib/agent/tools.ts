@@ -15,6 +15,7 @@ import {
   nextEscalationId,
   nextEventId,
   type CheckInSession,
+  type SafetyScreenRecord,
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
 
@@ -268,7 +269,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "complete_check_in",
     description:
-      "Close and lock the check-in record. Call only after the read-back in step 7, " +
+      "Close and lock the check-in record. Call only after the read-back in step 8, " +
       "or when ending a call early on an emergency escalation.",
     strict: true,
     input_schema: {
@@ -426,6 +427,44 @@ function naturalKey(...parts: (string | null | undefined)[]): string {
  * exists for — a process dying mid-call — could strand the data permanently,
  * reachable only by someone reading the database by hand.
  */
+/** Protocol truth for whether a screen item is a red flag. */
+function isRedFlagItem(itemId: string): boolean {
+  return PROTOCOL.safetyScreen.some((i) => i.id === itemId && i.redFlag);
+}
+
+/**
+ * Union of two safety screens, with the successor's answer winning a conflict.
+ *
+ * Additive because a half-finished screen is the point: the subject answered
+ * some items before the line dropped and the rest after, and re-asking a sick
+ * person a red-flag question they already answered is how a check-in gets
+ * abandoned. The successor wins ties because it is the more recent statement
+ * from the same subject.
+ */
+function mergeSafetyScreen(
+  live: SafetyScreenRecord | null,
+  carried: SafetyScreenRecord | null,
+): SafetyScreenRecord | null {
+  if (!carried) return live;
+  if (!live) return carried;
+
+  const items = [...carried.items];
+  for (const item of live.items) {
+    const at = items.findIndex((i) => i.itemId === item.itemId);
+    if (at === -1) items.push(item);
+    else items[at] = item;
+  }
+
+  // Recomputed from the merged items rather than unioned from the two lists: a
+  // red flag that was corrected to "no" on the second call must not survive
+  // because the first call recorded it.
+  const positiveRedFlags = items
+    .filter((i) => i.answer && isRedFlagItem(i.itemId))
+    .map((i) => i.itemId);
+
+  return { items, positiveRedFlags };
+}
+
 async function resumeDroppedCall(
   session: CheckInSession,
   subjectId: string,
@@ -439,12 +478,76 @@ async function resumeDroppedCall(
   // appeared inside a locked session with no matching audit entry, so the record
   // contradicted its own trail. The hash chain cannot see that; it arrives
   // through the object graph, not through the log.
-  session.adverseEvents = structuredClone(prior.adverseEvents);
-  session.safetyScreen = structuredClone(prior.safetyScreen);
-  session.adherence = structuredClone(prior.adherence);
-  session.conMeds = structuredClone(prior.conMeds);
-  session.escalations = structuredClone(prior.escalations);
-  session.solicitedReviewed = [...prior.solicitedReviewed];
+  //
+  // Merged, never assigned. The successor is not necessarily empty when this
+  // runs: the deterministic safety net escalates on the subject's *first*
+  // utterance, before the model takes a turn, and the DOB and an emergency
+  // routinely arrive in one breath — "March 11th 1958, sorry, I've been coughing
+  // up blood since last night". Assigning the prior call's escalations over the
+  // top erased that escalation, dropped the session out of `escalated`, and left
+  // an ESCALATED audit entry pointing at a record that no longer existed. The
+  // one escalation that must never depend on the model was the one being
+  // discarded.
+  // Taken before a single field is touched. If persisting the merge fails, the
+  // successor has to go back to being exactly the call it was: leaving it
+  // carrying an unsaved copy of the prior record, while that prior record is
+  // still open and claimable by a third call, is how one check-in becomes two.
+  const beforeCarry = {
+    adverseEvents: structuredClone(session.adverseEvents),
+    safetyScreen: structuredClone(session.safetyScreen),
+    adherence: structuredClone(session.adherence),
+    conMeds: structuredClone(session.conMeds),
+    escalations: structuredClone(session.escalations),
+    solicitedReviewed: [...session.solicitedReviewed],
+    subjectUtterances: [...session.subjectUtterances],
+    provenanceRejections: session.provenanceRejections,
+    refusedQuotes: [...session.refusedQuotes],
+    status: session.status,
+  };
+
+  const priorEvents = structuredClone(prior.adverseEvents);
+  const priorEscalations = structuredClone(prior.escalations);
+
+  // Carried adverse events keep their identifiers where the successor has none
+  // of its own, which is the normal case — every AE writer is gated behind
+  // verification. Where it does, they are renumbered and the escalations that
+  // reference them are rewritten through the same map, so no carried escalation
+  // is left pointing at an event id that now means something else.
+  const eventIdMap = new Map<string, string>();
+  for (const event of priorEvents) {
+    const collides = session.adverseEvents.some((e) => e.id === event.id);
+    const id = collides ? nextEventId(session) : event.id;
+    eventIdMap.set(event.id, id);
+    event.id = id;
+    session.adverseEvents.push(event);
+  }
+
+  for (const escalation of priorEscalations) {
+    escalation.relatedEventIds = escalation.relatedEventIds.map(
+      (id) => eventIdMap.get(id) ?? id,
+    );
+    escalation.id = nextEscalationId(session);
+    session.escalations.push(escalation);
+  }
+
+  // The screen and the solicited list are additive: an item answered on either
+  // call stays answered, and the successor's own answer wins a conflict because
+  // it is the more recent statement from the subject.
+  session.safetyScreen = mergeSafetyScreen(
+    session.safetyScreen,
+    structuredClone(prior.safetyScreen),
+  );
+  session.adherence = session.adherence ?? structuredClone(prior.adherence);
+  for (const med of structuredClone(prior.conMeds)) {
+    if (session.conMeds.some((m) => naturalKey(m.name) === naturalKey(med.name))) {
+      continue;
+    }
+    med.id = nextConMedId(session);
+    session.conMeds.push(med);
+  }
+  session.solicitedReviewed = [
+    ...new Set([...prior.solicitedReviewed, ...session.solicitedReviewed]),
+  ];
 
   // Prior speech comes too: without it the provenance gate would refuse a quote
   // of something said before the line dropped. Deduplicated, because a retried
@@ -505,7 +608,27 @@ async function resumeDroppedCall(
   });
 
   // Persist the successor first. Only then close the source.
-  await getSessionStore().save(session);
+  try {
+    await store.save(session);
+  } catch (err) {
+    // The merge never reached the database. Put the successor back and let the
+    // call continue unresumed rather than half-resumed: `prior` keeps its lease
+    // but stays open, so it goes back to being claimable once the lease ages out
+    // and its record is recovered by the next redial instead of stranded.
+    Object.assign(session, beforeCarry);
+    session.audit.record({
+      actor: "system",
+      action: "CALL_RESUME_FAILED",
+      entity: "CheckInSession",
+      entityId: prior.id,
+      after: { attemptedFrom: prior.id, error: String(err) },
+      reason:
+        "An earlier record was claimed but could not be persisted into this " +
+        "session. The carry-forward was rolled back; the earlier record remains " +
+        "open and is not closed.",
+    });
+    return null;
+  }
 
   prior.audit.record({
     actor: "system",
@@ -517,7 +640,13 @@ async function resumeDroppedCall(
       "Call was interrupted and the subject redialled. This record was carried " +
       "forward and this session is closed to further writes.",
   });
-  await store.supersede(prior, session.id);
+  try {
+    await store.supersede(prior, session.id);
+  } catch {
+    // Someone closed it first. The successor already holds the record — which is
+    // the outcome that matters — so the call proceeds; the loser of the race is
+    // the one that carried nothing forward.
+  }
 
   return nothingToCarry ? null : carried;
 }
@@ -556,7 +685,11 @@ const handlers: Record<string, Handler> = {
     }
 
     session.subject = subject;
-    session.status = "in_progress";
+    // Never downgrade. The deterministic net escalates on the subject's first
+    // utterance, which over a phone line is routinely the same breath as their
+    // date of birth — so this runs with the record already escalated, and
+    // assigning "in_progress" here quietly un-escalated it.
+    if (session.status !== "escalated") session.status = "in_progress";
     session.audit.record({
       actor: "system",
       action: "SUBJECT_VERIFIED",
@@ -582,16 +715,23 @@ const handlers: Record<string, Handler> = {
         coordinator: subject.coordinatorName,
         baseline_conditions: subject.baselineConditions,
         known_concomitant_medications: subject.knownConMeds,
-        instruction: resumed
-          ? "Verified, and an earlier call from this subject was interrupted — its " +
-            "record has been carried forward and is listed under 'resumed'. Do NOT " +
-            "start again. Acknowledge briefly that you spoke earlier, then continue " +
-            "from where it stopped: skip anything already recorded and pick up at the " +
-            "first unanswered item. Re-asking a sick person questions they already " +
-            "answered is how a check-in gets abandoned."
-          : "Verified. The baseline conditions listed above are already documented — " +
-            "do not record them as new adverse events unless the subject reports they " +
-            "have worsened. Proceed to step 2 and ask how they have been feeling.",
+        // The baseline sentence is appended, not swapped out. It used to be the
+        // alternative branch of this ternary, so every resumed call lost it
+        // while still being handed `baseline_conditions` — and a subject's
+        // long-standing neuropathy came back as a newly reported adverse event
+        // on the redial.
+        instruction:
+          "Verified. The baseline conditions listed above are already documented " +
+          "— do not record them as new adverse events unless the subject reports " +
+          "they have worsened. " +
+          (resumed
+            ? "An earlier call from this subject was interrupted; its record has " +
+              "been carried forward and is listed under 'resumed'. Do NOT start " +
+              "again. Acknowledge briefly that you spoke earlier, then continue " +
+              "from where it stopped: skip anything already recorded and pick up " +
+              "at the first unanswered item. Re-asking a sick person questions " +
+              "they already answered is how a check-in gets abandoned."
+            : "Proceed to step 2 and ask how they have been feeling."),
       },
     };
   },
@@ -902,6 +1042,20 @@ const handlers: Record<string, Handler> = {
   },
 
   record_adherence(session, input) {
+    // Every other clinical writer is gated on verification; these two were not,
+    // which is how they became reachable on the same turn as the safety net and
+    // ended up in the carry-forward's path.
+    if (!session.subject) {
+      return {
+        result: {
+          recorded: false,
+          instruction:
+            "Verify the subject with verify_subject before recording anything " +
+            "clinical.",
+        },
+        isError: true,
+      };
+    }
     const missed = Number(input.doses_missed ?? 0);
     // doses_missed is structured data and survives a doubtful reason.
     const reason = screenQuote(
@@ -938,6 +1092,17 @@ const handlers: Record<string, Handler> = {
   },
 
   record_concomitant_medication(session, input) {
+    if (!session.subject) {
+      return {
+        result: {
+          recorded: false,
+          instruction:
+            "Verify the subject with verify_subject before recording anything " +
+            "clinical.",
+        },
+        isError: true,
+      };
+    }
     // The drug name and start date are what an interaction check needs; losing
     // them because the stated reason was loosely quoted has no clinical basis.
     const indication = screenQuote(
@@ -967,7 +1132,10 @@ const handlers: Record<string, Handler> = {
         startedDescription.trim() !== ""
           ? startedDescription
           : (existing?.startedDescription ?? ""),
-      recordedAt: new Date().toISOString(),
+      // When the medication was first captured, not when it was last mentioned.
+      // A subject re-reporting the same drug on a redial was moving this forward,
+      // so the eCRF no longer showed when it entered the record.
+      recordedAt: existing?.recordedAt ?? new Date().toISOString(),
     };
 
     if (existing) {

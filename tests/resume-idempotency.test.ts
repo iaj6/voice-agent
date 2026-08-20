@@ -358,3 +358,206 @@ test("two events sharing a reason phrase are two escalations", async () => {
     "the second event's link would otherwise never be recorded",
   );
 });
+
+/**
+ * A safety-net escalation exists before the model has taken a turn.
+ *
+ * This is the shape that matters: the deterministic net fires on the subject's
+ * first utterance, and over a phone line the date of birth and an emergency
+ * arrive in one breath. Resume then runs inside verify_subject, on the same
+ * turn, with an escalation already on the record.
+ */
+function escalateFromNet(session: CheckInSession, category: string) {
+  const record = {
+    id: `ESC-${String(session.escalations.length + 1).padStart(3, "0")}`,
+    urgency: "emergency" as const,
+    reason: `Deterministic safety rule fired on subject speech: ${category}`,
+    relatedEventIds: [] as string[],
+    triggeredBy: "safety_net" as const,
+    category,
+    createdAt: new Date().toISOString(),
+    sponsorNotificationDeadline: null,
+  };
+  session.escalations.push(record);
+  session.status = "escalated";
+  session.audit.record({
+    actor: "safety_net",
+    action: "ESCALATED",
+    entity: "Escalation",
+    entityId: record.id,
+    after: record,
+    reason: "Rule-based escalation independent of model judgment.",
+  });
+  return record;
+}
+
+test("a safety-net escalation raised before verification survives the redial", async () => {
+  const dropped = await callWith(SPOKEN);
+  await executeTool(dropped, "verify_subject", VERIFY);
+  await executeTool(dropped, "record_adverse_event", AE);
+  await markAsDropped(dropped);
+
+  // "March 11th 1958 — sorry, I've been coughing up blood since last night"
+  const redial = await callWith(["March 11th 1958, I've been coughing up blood"]);
+  const raised = escalateFromNet(redial, "Severe bleeding");
+  await getSessionStore().save(redial);
+
+  await executeTool(redial, "verify_subject", VERIFY);
+
+  assert.ok(
+    redial.escalations.some((e) => e.id === raised.id && e.triggeredBy === "safety_net"),
+    "the redial's own emergency escalation was erased by the carry-forward",
+  );
+  assert.equal(redial.status, "escalated", "the session stopped being escalated");
+  assert.equal(redial.adverseEvents.length, 1, "the prior call's record was not carried");
+});
+
+test("every ESCALATED audit entry names an escalation the record still holds", async () => {
+  const dropped = await callWith(SPOKEN);
+  await executeTool(dropped, "verify_subject", VERIFY);
+  await executeTool(dropped, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "Grade 3 event requires review.",
+    related_event_ids: [],
+  });
+  await markAsDropped(dropped);
+
+  const redial = await callWith(["March 11th 1958, I've been coughing up blood"]);
+  escalateFromNet(redial, "Severe bleeding");
+  await getSessionStore().save(redial);
+  await executeTool(redial, "verify_subject", VERIFY);
+
+  const held = new Set(redial.escalations.map((e) => e.id));
+  const orphans = redial.audit
+    .all()
+    .filter((e) => e.action === "ESCALATED")
+    .map((e) => e.entityId)
+    .filter((id) => id !== null && !held.has(id));
+
+  assert.deepEqual(orphans, [], "the trail points at escalations the record lost");
+  assert.equal(
+    new Set(redial.escalations.map((e) => e.id)).size,
+    redial.escalations.length,
+    "two escalations share an id, so one page overwrites the other",
+  );
+});
+
+test("a carried escalation still points at the event it was raised for", async () => {
+  const dropped = await callWith(SPOKEN);
+  await executeTool(dropped, "verify_subject", VERIFY);
+  await executeTool(dropped, "record_adverse_event", AE);
+  await executeTool(dropped, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "Fatigue limiting self-care.",
+    related_event_ids: ["AE-001"],
+  });
+  await markAsDropped(dropped);
+
+  const redial = await callWith(["March 11th 1958, I've been coughing up blood"]);
+  escalateFromNet(redial, "Severe bleeding");
+  await getSessionStore().save(redial);
+  await executeTool(redial, "verify_subject", VERIFY);
+
+  const carried = redial.escalations.find((e) => e.triggeredBy === "agent");
+  assert.ok(carried, "the prior call's escalation was not carried");
+  for (const id of carried.relatedEventIds) {
+    assert.ok(
+      redial.adverseEvents.some((e) => e.id === id),
+      `carried escalation references ${id}, which is not in the merged record`,
+    );
+  }
+});
+
+test("nothing clinical is recorded before the subject is verified", async () => {
+  const session = await callWith(SPOKEN);
+
+  const adherence = await executeTool(session, "record_adherence", {
+    doses_missed: 2,
+    reason_verbatim: null,
+  });
+  const conMed = await executeTool(session, "record_concomitant_medication", {
+    name: "Ondansetron",
+    indication_verbatim: null,
+    started_description: "Tuesday",
+  });
+
+  assert.equal(session.adherence, null, "adherence was recorded before verification");
+  assert.equal(session.conMeds.length, 0, "a con-med was recorded before verification");
+  assert.equal(adherence.isError, true);
+  assert.equal(conMed.isError, true);
+});
+
+test("the baseline-conditions instruction is not lost on a resumed call", async () => {
+  const dropped = await callWith(SPOKEN);
+  await executeTool(dropped, "verify_subject", VERIFY);
+  await executeTool(dropped, "record_adverse_event", AE);
+  await markAsDropped(dropped);
+
+  const redial = await callWith(SPOKEN);
+  const out = await executeTool(redial, "verify_subject", VERIFY);
+  const instruction = String(
+    (out.result as Record<string, unknown>).instruction ?? "",
+  );
+
+  assert.ok((out.result as Record<string, unknown>).resumed, "this call did not resume");
+  assert.match(
+    instruction,
+    /baseline conditions/i,
+    "a resumed call is handed baseline_conditions with no instruction about them",
+  );
+  assert.match(instruction, /carried forward/i, "the resume instruction was lost");
+});
+
+test("a heartbeat keeps a quiet live call from being claimed", async () => {
+  const live = await callWith(SPOKEN);
+  await executeTool(live, "verify_subject", VERIFY);
+  await markAsDropped(live); // silence long enough to look dropped
+
+  // The subject was there all along — they just went to find their pill bottle.
+  await getSessionStore().touch(live.id);
+
+  const claimed = await getSessionStore().claimResumable(VERIFY.subject_id, "other");
+  assert.equal(claimed, null, "a live call was claimed after a heartbeat");
+});
+
+test("a record cannot be superseded twice", async () => {
+  const dropped = await callWith(SPOKEN);
+  await executeTool(dropped, "verify_subject", VERIFY);
+  await markAsDropped(dropped);
+
+  const store = getSessionStore();
+  const first = await store.claimResumable(VERIFY.subject_id, "successor-a");
+  assert.ok(first, "nothing was claimed");
+  await store.supersede(first, "successor-a");
+
+  await assert.rejects(
+    () => store.supersede(first, "successor-b"),
+    /already closed/,
+    "a closed record reported itself superseded a second time",
+  );
+});
+
+test("a medication re-reported on a redial keeps its first capture time", async () => {
+  const session = await callWith(SPOKEN);
+  await executeTool(session, "verify_subject", VERIFY);
+  await executeTool(session, "record_concomitant_medication", {
+    name: "Ondansetron",
+    indication_verbatim: null,
+    started_description: "Tuesday",
+  });
+  const first = session.conMeds[0].recordedAt;
+
+  await new Promise((r) => setTimeout(r, 5));
+  await executeTool(session, "record_concomitant_medication", {
+    name: "ondansetron",
+    indication_verbatim: null,
+    started_description: "a while back",
+  });
+
+  assert.equal(session.conMeds.length, 1, "the medication was duplicated");
+  assert.equal(
+    session.conMeds[0].recordedAt,
+    first,
+    "re-reporting moved the capture time forward, losing when it entered the record",
+  );
+});

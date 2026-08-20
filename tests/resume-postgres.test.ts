@@ -205,6 +205,43 @@ describe("resume against Postgres", { skip: databaseAvailable() ? false : "DATAB
     );
   });
 
+  test("a refused write leaves nothing behind on the audit trail", async () => {
+    const store = getSessionStore();
+    const live = await droppedCall();
+    const successor = await store.create();
+    await store.supersede(live, successor.id);
+
+    // The original call, unaware it was superseded, records an adverse event.
+    const stale = (await store.get(live.id))!;
+    stale.completedAt = null;
+    stale.subjectUtterances = [...SPOKEN];
+    await executeTool(stale, "record_adverse_event", {
+      verbatim_term: "I've been very tired",
+      coded_term: "Fatigue",
+      onset_description: "this week",
+      ongoing: true,
+      grade: 2,
+      grade_rationale: "Cut back on errands.",
+      limits_self_care: false,
+      spontaneous: true,
+    });
+    await assert.rejects(() => store.save(stale), /closed by another process/);
+
+    const reloaded = (await store.get(live.id))!;
+    const trailClaims = reloaded.audit.all().some((e) => e.action === "AE_RECORDED");
+    const recordHas = reloaded.adverseEvents.length > 0;
+
+    // The chain verified even when this was broken — every entry was
+    // individually well-formed. What was wrong was that the record disagreed
+    // with its own trail, which the hash chain cannot see.
+    assert.equal(reloaded.audit.verifyChain().valid, true);
+    assert.equal(
+      trailClaims,
+      recordHas,
+      "the audit trail records an adverse event the record does not contain",
+    );
+  });
+
   test("the audit chain still verifies after a Postgres round trip", async () => {
     const store = getSessionStore();
     const dropped = await droppedCall();
@@ -214,6 +251,40 @@ describe("resume against Postgres", { skip: databaseAvailable() ? false : "DATAB
     const reloaded = (await store.get(dropped.id))!;
     assert.ok(reloaded.audit.all().length > 0, "no audit entries came back");
     assert.equal(reloaded.audit.verifyChain().valid, true);
+  });
+
+  test("a heartbeat on a quiet line keeps the call unclaimable", async () => {
+    const store = getSessionStore();
+    const live = await droppedCall(); // aged: looks dropped
+    await store.touch(live.id);
+
+    const claimed = await store.claimResumable(
+      VERIFY.subject_id,
+      "00000000-0000-0000-0000-00000000000e",
+    );
+    assert.equal(claimed, null, "a live call was claimed despite a heartbeat");
+  });
+
+  test("touching a closed record does not raise the lock trigger", async () => {
+    const store = getSessionStore();
+    const dropped = await droppedCall();
+    const successor = await store.create();
+    await store.supersede(dropped, successor.id);
+    await store.touch(dropped.id); // must be a no-op, not an exception
+  });
+
+  test("a record cannot be superseded twice", async () => {
+    const store = getSessionStore();
+    const dropped = await droppedCall();
+    const successor = await store.create();
+    await store.supersede(dropped, successor.id);
+
+    dropped.completedAt = null;
+    await assert.rejects(
+      () => store.supersede(dropped, "00000000-0000-0000-0000-00000000000f"),
+      /already closed/,
+      "a lost race reported success, so the record could be carried forward twice",
+    );
   });
 
   test("audit_entry rejects deletion", async () => {

@@ -16,6 +16,7 @@ import {
   snapshot,
   type CheckInSession,
 } from "../store/session.ts";
+import { getSessionStore } from "../store/session-store.ts";
 
 /**
  * A dedicated HTTP/1.1 connection pool, not the process-global one.
@@ -249,6 +250,20 @@ export async function* runTurn(
   // Ground truth for the provenance check. Only genuine subject speech — the
   // synthetic call-start turn is ours and must never be quotable.
   if (source === "subject") session.subjectUtterances.push(utterance);
+
+  // Liveness, separate from persistence. A redial decides whether a prior call
+  // is dropped by how long it has been since that call last touched its row, and
+  // nothing is written while a subject is speaking or thinking. Without this, a
+  // participant who set the phone down for two minutes could have their live
+  // record superseded by a retried inbound leg. Cheap, and off the critical
+  // path — a failed heartbeat must never take down a call in progress.
+  if (source === "subject") {
+    getSessionStore()
+      .touch(session.id)
+      .catch(() => {
+        /* liveness is advisory; the call continues either way */
+      });
+  }
 
   if (hits.length > 0) {
     const urgency = highestUrgency(hits)!;
