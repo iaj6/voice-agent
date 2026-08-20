@@ -75,3 +75,27 @@ test("fatal or life-threatening events take the 7-day path", () => {
     assert.match(d.indSafetyReportNote!, /7-calendar-day/);
   }
 });
+
+test("holding back the longest stop sequence", () => {
+  // Regression: the hold-back capped the checked suffix one character short of
+  // the longest sequence, so "\nAssistant:" (11 chars) reached the synthesizer.
+  const STOPS = ["\nuser", "\nUser", "\nassistant", "\nAssistant:", "\nHuman:"];
+  const MAX = Math.max(...STOPS.map((s) => s.length));
+  const holdBack = (buf: string) => {
+    const max = Math.min(MAX, buf.length);
+    for (let n = max; n > 0; n--) {
+      if (STOPS.some((s) => s.startsWith(buf.slice(buf.length - n)))) return n;
+    }
+    return 0;
+  };
+  let held = "";
+  let emitted = "";
+  for (const ch of "Okay.\nAssistant:") {
+    held += ch;
+    const n = holdBack(held);
+    emitted += held.slice(0, held.length - n);
+    held = held.slice(held.length - n);
+  }
+  assert.equal(emitted, "Okay.", "nothing past the sentence should be emitted");
+  assert.equal(held, "\nAssistant:", "the whole sequence must be held for discard");
+});

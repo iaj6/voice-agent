@@ -115,7 +115,11 @@ const MAX_STOP_LEN = Math.max(...STOP_SEQUENCES.map((s) => s.length));
  * that will be discarded.
  */
 function pendingStopPrefixLength(buffered: string): number {
-  const max = Math.min(MAX_STOP_LEN - 1, buffered.length);
+  // MAX_STOP_LEN, not MAX_STOP_LEN - 1. A complete sequence is a prefix of
+  // itself and must be held, so the stop_reason check downstream can discard it.
+  // Capping one short let the longest sequence ("\nAssistant:", 11 chars) through
+  // to the synthesizer — the exact leak this function exists to prevent.
+  const max = Math.min(MAX_STOP_LEN, buffered.length);
   for (let n = max; n > 0; n--) {
     const suffix = buffered.slice(buffered.length - n);
     if (STOP_SEQUENCES.some((stop) => stop.startsWith(suffix))) return n;
@@ -174,6 +178,29 @@ function safetyNetSystemMessage(hits: SafetyNetHit[]): string {
     "alert to the subject.\n\n" +
     lines.join("\n")
   );
+}
+
+/**
+ * Marks a solicited symptom reviewed when the agent actually asks about it.
+ *
+ * Previously the only writer was record_adverse_event, so a symptom the subject
+ * denied never showed as reviewed and the console's checklist stayed unlit on a
+ * clean check-in. A coordinator could not tell "asked, negative" from "never
+ * asked" — the same partial-versus-complete distinction the safety screen goes
+ * out of its way to preserve.
+ *
+ * The protocol prompts are verbatim-pinned, so matching the spoken text against
+ * them is deterministic and needs nothing from the model.
+ */
+function markSolicitedAsked(session: CheckInSession, spoken: string) {
+  if (!spoken) return;
+  const haystack = spoken.toLowerCase();
+  for (const item of PROTOCOL.solicitedSymptoms) {
+    if (session.solicitedReviewed.includes(item.term)) continue;
+    if (haystack.includes(item.prompt.toLowerCase())) {
+      session.solicitedReviewed.push(item.term);
+    }
+  }
 }
 
 /**
@@ -280,6 +307,7 @@ export async function* runTurn(
    * two sentences get read aloud as one run-on.
    */
   let emittedTextThisTurn = false;
+  let spokenThisTurn = "";
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const chunker = new SentenceChunker();
@@ -338,6 +366,7 @@ export async function* runTurn(
             firstDeltaOfIteration = false;
             spokeThisTurn = true;
             emittedTextThisTurn = true;
+            spokenThisTurn += text;
             yield { type: "delta", text };
             for (const sentence of chunker.push(text)) {
               yield { type: "speak", text: sentence };
@@ -357,6 +386,7 @@ export async function* runTurn(
               : held;
           spokeThisTurn = true;
           emittedTextThisTurn = true;
+          spokenThisTurn += text;
           yield { type: "delta", text };
           for (const sentence of chunker.push(text)) {
             yield { type: "speak", text: sentence };
@@ -457,6 +487,7 @@ export async function* runTurn(
     yield { type: "state", snapshot: snapshot(session) };
   }
 
+  markSolicitedAsked(session, spokenThisTurn);
   await saveSession(session);
   yield { type: "state", snapshot: snapshot(session) };
   yield { type: "done", terminal };
