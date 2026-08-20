@@ -17,7 +17,23 @@ export interface SessionStore {
   create(): Promise<CheckInSession>;
   get(id: string): Promise<CheckInSession | null>;
   save(session: CheckInSession): Promise<void>;
+  /**
+   * The most recent unfinished check-in for a subject, if one is recent enough
+   * to be the same call.
+   *
+   * Time-bounded because an unfinished session from last week is a different
+   * check-in that someone abandoned, not a dropped call to resume. Resuming that
+   * would silently merge two visits into one record.
+   */
+  findResumable(
+    subjectId: string,
+    withinMs: number,
+    excludeId: string,
+  ): Promise<CheckInSession | null>;
 }
+
+/** How long after a drop a redial still counts as the same check-in. */
+export const RESUME_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 /** The clinical record, separated from the conversation for storage. */
 interface StoredRecord {
@@ -32,6 +48,7 @@ interface StoredRecord {
   subjectUtterances: string[];
   provenanceRejections: number;
   refusedQuotes: string[];
+  resumable: boolean;
 }
 
 function toRecord(session: CheckInSession): StoredRecord {
@@ -47,6 +64,7 @@ function toRecord(session: CheckInSession): StoredRecord {
     subjectUtterances: session.subjectUtterances,
     provenanceRejections: session.provenanceRejections,
     refusedQuotes: session.refusedQuotes,
+    resumable: session.resumable,
   };
 }
 
@@ -61,6 +79,7 @@ function blankSession(id: string): CheckInSession {
     subjectUtterances: [],
     provenanceRejections: 0,
     refusedQuotes: [],
+    resumable: true,
     adverseEvents: [],
     safetyScreen: null,
     adherence: null,
@@ -103,6 +122,28 @@ class MemorySessionStore implements SessionStore {
 
   async save(session: CheckInSession): Promise<void> {
     this.sessions.set(session.id, session);
+  }
+
+  async findResumable(
+    subjectId: string,
+    withinMs: number,
+    excludeId: string,
+  ): Promise<CheckInSession | null> {
+    const cutoff = Date.now() - withinMs;
+    const candidates = [...this.sessions.values()]
+      .filter(
+        (s) =>
+          s.id !== excludeId &&
+          s.completedAt === null &&
+          s.resumable &&
+          s.subject?.subjectId === subjectId &&
+          new Date(s.createdAt).getTime() >= cutoff,
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    return candidates[0] ?? null;
   }
 }
 
@@ -147,6 +188,7 @@ class PostgresSessionStore implements SessionStore {
       subjectUtterances: record.subjectUtterances ?? [],
       provenanceRejections: record.provenanceRejections ?? 0,
       refusedQuotes: record.refusedQuotes ?? [],
+      resumable: record.resumable ?? true,
       adverseEvents: record.adverseEvents ?? [],
       safetyScreen: record.safetyScreen ?? null,
       adherence: record.adherence ?? null,
@@ -217,6 +259,26 @@ class PostgresSessionStore implements SessionStore {
              updated_at = now()
        where id = ${session.id}`;
     await this.appendAudit(session);
+  }
+
+  async findResumable(
+    subjectId: string,
+    withinMs: number,
+    excludeId: string,
+  ): Promise<CheckInSession | null> {
+    const sql = getDb();
+    const cutoff = new Date(Date.now() - withinMs).toISOString();
+    const rows = (await sql`
+      select id from check_in_session
+       where subject_id = ${subjectId}
+         and completed_at is null
+         and coalesce((record ->> 'resumable')::boolean, true)
+         and id <> ${excludeId}
+         and created_at >= ${cutoff}
+       order by created_at desc
+       limit 1`) as { id: string }[];
+    if (rows.length === 0) return null;
+    return this.get(rows[0].id);
   }
 
   /** Inserts only entries not already persisted. The table rejects rewrites. */

@@ -5,8 +5,17 @@ import { PROTOCOL } from "@/lib/clinical/protocol";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST() {
-  const session = await createSession();
+export async function POST(request: Request) {
+  // `resumable: false` opts a session out of being claimed by a later call as a
+  // dropped one. Used by the eval harness; a real call never sets it.
+  let resumable = true;
+  try {
+    const body = (await request.json()) as { resumable?: unknown };
+    if (body?.resumable === false) resumable = false;
+  } catch {
+    /* no body is the normal case */
+  }
+  const session = await createSession({ resumable });
   return NextResponse.json({
     session: snapshot(session),
     protocol: {

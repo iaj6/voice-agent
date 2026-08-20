@@ -466,7 +466,7 @@ export async function* runTurn(
     for (const call of toolUses) {
       yield { type: "tool_call", id: call.id, name: call.name, input: call.input };
 
-      const outcome = executeTool(session, call.name, call.input);
+      const outcome = await executeTool(session, call.name, call.input);
       if (outcome.terminal) terminal = true;
 
       yield {

@@ -21,6 +21,7 @@ function sessionWith(utterances: string[]): CheckInSession {
     subjectUtterances: utterances,
     provenanceRejections: 0,
     refusedQuotes: [],
+    resumable: true,
     adverseEvents: [],
     safetyScreen: null,
     adherence: null,
@@ -48,12 +49,12 @@ const FABRICATED_AE = {
   spontaneous: true,
 };
 
-test("a fabricated quote never reaches the record", () => {
+test("a fabricated quote never reaches the record", async () => {
   // The exact quote that was written for real, from the agent's own hallucinated
   // patient reply. The graded event is the agent's clinical judgement and is
   // kept for a human to review; the invented words are not.
   const session = sessionWith(SPOKEN);
-  executeTool(session, "record_adverse_event", FABRICATED_AE);
+  await executeTool(session, "record_adverse_event", FABRICATED_AE);
 
   const written = JSON.stringify(session.adverseEvents);
   assert.ok(
@@ -62,11 +63,11 @@ test("a fabricated quote never reaches the record", () => {
   );
 });
 
-test("the refusal is recorded, not silent", () => {
+test("the refusal is recorded, not silent", async () => {
   // A refused quote is evidence the model tried to enter unfounded content.
   // Dropping it silently discards the only signal the call has gone wrong.
   const session = sessionWith(SPOKEN);
-  executeTool(session, "record_adverse_event", FABRICATED_AE);
+  await executeTool(session, "record_adverse_event", FABRICATED_AE);
 
   const refusals = session.audit
     .all()
@@ -76,9 +77,9 @@ test("the refusal is recorded, not silent", () => {
   assert.deepEqual(session.audit.verifyChain(), { valid: true });
 });
 
-test("a genuine capture passes the gate untouched", () => {
+test("a genuine capture passes the gate untouched", async () => {
   const session = sessionWith(SPOKEN);
-  const outcome = executeTool(session, "record_adverse_event", {
+  const outcome = await executeTool(session, "record_adverse_event", {
     ...FABRICATED_AE,
     verbatim_term: "very tired, couldn't shower Tuesday, daughter had to help",
     coded_term: "Fatigue",
@@ -91,7 +92,7 @@ test("a genuine capture passes the gate untouched", () => {
   assert.equal(session.provenanceRejections, 0);
 });
 
-test("a doubtful quote never costs the structured data beside it", () => {
+test("a doubtful quote never costs the structured data beside it", async () => {
   // Regression, HIGH. The gate used to abort the whole tool call, so a red-flag
   // "yes" was discarded whenever the agent's paraphrase of it scored badly and
   // no coordinator was paged — silently undoing the correction-escalation fix.
@@ -100,7 +101,7 @@ test("a doubtful quote never costs the structured data beside it", () => {
     "Yeah, my temperature was up around 103 on Sunday",
   ]);
 
-  const outcome = executeTool(session, "record_safety_screen_item", {
+  const outcome = await executeTool(session, "record_safety_screen_item", {
     item_id: "fever",
     answer: true,
     // Digits-versus-words, an ordinary transcription mismatch. Scores badly.
@@ -120,9 +121,9 @@ test("a doubtful quote never costs the structured data beside it", () => {
   assert.equal(session.status, "escalated");
 });
 
-test("adherence keeps its dose count when only the reason is doubtful", () => {
+test("adherence keeps its dose count when only the reason is doubtful", async () => {
   const session = sessionWith(["I was away visiting family last week"]);
-  const outcome = executeTool(session, "record_adherence", {
+  const outcome = await executeTool(session, "record_adherence", {
     doses_missed: 2,
     reason_verbatim: "I was at my brother's wedding in Scotland",
   });
@@ -131,11 +132,11 @@ test("adherence keeps its dose count when only the reason is doubtful", () => {
   assert.equal(session.adherence?.reasonVerbatim, null);
 });
 
-test("a concomitant medication keeps its name when the indication is doubtful", () => {
+test("a concomitant medication keeps its name when the indication is doubtful", async () => {
   // Losing the drug name because the stated reason was loosely quoted is an
   // interaction-check gap with no clinical justification.
   const session = sessionWith(["My knee's been sore since I fell last week"]);
-  const outcome = executeTool(session, "record_concomitant_medication", {
+  const outcome = await executeTool(session, "record_concomitant_medication", {
     name: "Ibuprofen",
     indication_verbatim: "for the crushing headaches every morning",
     started_description: "last week",
@@ -146,9 +147,9 @@ test("a concomitant medication keeps its name when the indication is doubtful", 
   assert.equal(session.conMeds[0].indicationVerbatim, "");
 });
 
-test("an adverse event is still recorded, without the invented quote", () => {
+test("an adverse event is still recorded, without the invented quote", async () => {
   const session = sessionWith(SPOKEN);
-  const outcome = executeTool(session, "record_adverse_event", FABRICATED_AE);
+  const outcome = await executeTool(session, "record_adverse_event", FABRICATED_AE);
   assert.notEqual(outcome.isError, true);
   assert.equal(session.adverseEvents.length, 1, "the graded event survives");
   assert.equal(
@@ -158,13 +159,13 @@ test("an adverse event is still recorded, without the invented quote", () => {
   );
 });
 
-test("identical retries are not counted as separate fabrications", () => {
+test("identical retries are not counted as separate fabrications", async () => {
   // The model retries a refused call. With MAX_TOOL_ITERATIONS at 8, three
   // identical retries inside one turn used to cross the escalation threshold
   // and page a coordinator about a call that was fine.
   const session = sessionWith(SPOKEN);
   for (let i = 0; i < 4; i++) {
-    executeTool(session, "record_adverse_event", FABRICATED_AE);
+    await executeTool(session, "record_adverse_event", FABRICATED_AE);
   }
   assert.equal(session.provenanceRejections, 1, "one distinct fabrication");
   assert.equal(
@@ -174,10 +175,10 @@ test("identical retries are not counted as separate fabrications", () => {
   );
 });
 
-test("distinct fabrications still escalate", () => {
+test("distinct fabrications still escalate", async () => {
   const session = sessionWith(SPOKEN);
   for (const term of ["helicopters overhead", "the purple curtains", "my third elbow"]) {
-    executeTool(session, "record_adverse_event", {
+    await executeTool(session, "record_adverse_event", {
       ...FABRICATED_AE,
       coded_term: term,
       verbatim_term: `something about ${term} that was never said aloud`,

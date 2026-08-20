@@ -60,8 +60,8 @@ gap more expensive to close.
 | 1.1 | Session store behind a persistence interface | A | Existing tests pass unchanged against the new backing | **done** |
 | 1.2 | Database-backed implementation | A | Kill the server mid-call; the session resumes intact | **done** |
 | 1.3 | Audit trail persisted append-only | B | Chain verifies across a restart; no update path exists in the schema | **done — needs review** |
-| 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | todo |
-| 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | todo |
+| 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | **done — needs review** |
+| 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | **done — needs review** |
 | 1.6 | Retention and legal-hold posture documented | C | Reviewed | todo |
 | 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **done — needs review** |
 | 1.8 | Versioned migrations | A | Schema changes are ordered and replayable, not idempotent DDL | todo |
@@ -216,6 +216,7 @@ Append one line per sprint close: what shipped, what moved, what the gate said.
 
 | Date | Sprint | Outcome |
 |---|---|---|
+| 2026-08-20 | 1 | 1.4 and 1.5 done. A redial within 2h carries the dropped call's record forward, locks the source so nothing is claimed twice, and brings prior speech so the provenance gate still allows quoting it. Idempotency is on natural keys, not caller-supplied ones — a redialling agent has no memory of a key it generated on the first call. Found and fixed cross-run contamination in the eval harness: personas that stop mid-call looked exactly like dropped lines to the next run. 81 unit tests. |
 | 2026-08-20 | 1 | Second review of 1.7 found six more, one HIGH: the gate aborted the whole tool call, so a red-flag "yes" died with a loosely-quoted verbatim and nobody was paged — my own test locked it in. Now screens the field, not the record. Also: short quotes no longer bypass an empty transcript, scoring is per-utterance so a quote cannot be assembled from unrelated turns, a dropped negation is refused, a swapped body site is refused, plurals match singulars, and retries are deduplicated. 72 unit tests. |
 | 2026-08-20 | 1 | 1.7 done. Provenance gate on all four verbatim writers; refusals audited, three escalate. Fabrications score 0.00 against genuine captures at 0.80–1.00, so the 0.6 threshold sits in a wide gap. Also fixed all 11 code-review findings, two HIGH — ConText scopes crossed clause boundaries and suppressed four real emergencies; a screen answer corrected no→yes never escalated. lib/ converted to relative imports so the write path is testable without a build. 55 unit tests. |
 | 2026-08-20 | 1 | 1.1–1.3 done. Neon provisioned (free, iad1, auth off). Append-only enforced by trigger, verified: UPDATE and DELETE both rejected, cleanup required disabling them. **Postgres reorders JSONB keys**, which broke the hash chain on read-back — fixed with canonical serialisation, three tests added. SIGKILL mid-call then cold restart: subject, 1 AE, 3 escalations, 13 audit entries, chain valid — identical. **Observed a falsified eCRF entry** (see 1.7). |

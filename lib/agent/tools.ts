@@ -16,6 +16,7 @@ import {
   nextEventId,
   type CheckInSession,
 } from "../store/session.ts";
+import { RESUME_WINDOW_MS, getSessionStore } from "../store/session-store.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -301,7 +302,7 @@ export interface ToolOutcome {
 type Handler = (
   session: CheckInSession,
   input: Record<string, unknown>,
-) => ToolOutcome;
+) => ToolOutcome | Promise<ToolOutcome>;
 
 /**
  * Screens a verbatim quote, returning the value that may be stored.
@@ -397,8 +398,113 @@ function screenQuote(
   return null;
 }
 
+/**
+ * Natural key for deduplicating a write.
+ *
+ * Natural rather than caller-supplied, because the case that matters is a redial:
+ * the agent on the second call has no memory of a key it generated on the first.
+ * Domain identity is the only thing both calls agree on.
+ */
+function naturalKey(...parts: (string | null | undefined)[]): string {
+  return parts
+    .map((p) => (p ?? "").toLowerCase().replace(/\s+/g, " ").trim())
+    .join("|");
+}
+
+/**
+ * Carries a dropped call's record forward into the current one.
+ *
+ * A call that drops after an adverse event is captured leaves that event in a
+ * session nobody will look at again, and the subject — who has already described
+ * it once — is asked to describe it a second time. Both are bad: a stranded
+ * reportable event is a compliance gap, and re-interrogating someone who is
+ * unwell is how a check-in gets abandoned halfway.
+ *
+ * The prior session is locked afterwards, so its content cannot be claimed twice.
+ * Its own audit trail stays with it and this one records the transfer, so both
+ * halves of an interrupted call remain reconstructable.
+ */
+async function resumeDroppedCall(
+  session: CheckInSession,
+  subjectId: string,
+): Promise<{
+  from: string;
+  startedAt: string;
+  adverseEvents: number;
+  screenItems: number;
+  conMeds: number;
+  escalations: number;
+  adherenceRecorded: boolean;
+} | null> {
+  const store = getSessionStore();
+  const prior = await store.findResumable(subjectId, RESUME_WINDOW_MS, session.id);
+  if (!prior) return null;
+
+  const carried = {
+    from: prior.id,
+    startedAt: prior.createdAt,
+    adverseEvents: prior.adverseEvents.length,
+    screenItems: prior.safetyScreen?.items.length ?? 0,
+    conMeds: prior.conMeds.length,
+    escalations: prior.escalations.length,
+    adherenceRecorded: prior.adherence !== null,
+  };
+
+  const nothingToCarry =
+    carried.adverseEvents === 0 &&
+    carried.screenItems === 0 &&
+    carried.conMeds === 0 &&
+    carried.escalations === 0 &&
+    !carried.adherenceRecorded;
+
+  session.adverseEvents = [...prior.adverseEvents];
+  session.safetyScreen = prior.safetyScreen;
+  session.adherence = prior.adherence;
+  session.conMeds = [...prior.conMeds];
+  session.escalations = [...prior.escalations];
+  session.solicitedReviewed = [...prior.solicitedReviewed];
+  // Prior speech comes too: without it the provenance gate would refuse a quote
+  // of something the subject said before the line dropped.
+  session.subjectUtterances = [
+    ...prior.subjectUtterances,
+    ...session.subjectUtterances,
+  ];
+  if (prior.status === "escalated") session.status = "escalated";
+
+  session.audit.record({
+    actor: "system",
+    action: "CALL_RESUMED",
+    entity: "CheckInSession",
+    entityId: prior.id,
+    after: carried,
+    reason:
+      "An earlier check-in for this subject was interrupted within the resume " +
+      "window. Its record was carried forward and the earlier session locked.",
+  });
+
+  // Lock the source so the same content cannot be carried forward twice.
+  prior.completedAt = new Date().toISOString();
+  prior.status = prior.status === "escalated" ? "escalated" : "completed";
+  prior.summary =
+    (prior.summary ?? "") +
+    ` [Interrupted; record carried forward into session ${session.id}.]`;
+  prior.audit.record({
+    actor: "system",
+    action: "SESSION_SUPERSEDED",
+    entity: "CheckInSession",
+    entityId: prior.id,
+    after: { supersededBy: session.id },
+    reason:
+      "Call was interrupted and the subject redialled. This record was carried " +
+      "forward and this session is closed to further writes.",
+  });
+  await store.save(prior);
+
+  return nothingToCarry ? null : carried;
+}
+
 const handlers: Record<string, Handler> = {
-  verify_subject(session, input) {
+  async verify_subject(session, input) {
     const subjectId = String(input.subject_id ?? "");
     const dob = String(input.date_of_birth ?? "");
     session.verificationAttempts += 1;
@@ -441,9 +547,12 @@ const handlers: Record<string, Handler> = {
       reason: "Two-factor verification succeeded (subject ID + date of birth).",
     });
 
+    const resumed = await resumeDroppedCall(session, subject.subjectId);
+
     return {
       result: {
         verified: true,
+        ...(resumed ? { resumed } : {}),
         subject_id: subject.subjectId,
         initials: subject.initials,
         site: subject.siteName,
@@ -454,10 +563,16 @@ const handlers: Record<string, Handler> = {
         coordinator: subject.coordinatorName,
         baseline_conditions: subject.baselineConditions,
         known_concomitant_medications: subject.knownConMeds,
-        instruction:
-          "Verified. The baseline conditions listed above are already documented — " +
-          "do not record them as new adverse events unless the subject reports they " +
-          "have worsened. Proceed to step 2 and ask how they have been feeling.",
+        instruction: resumed
+          ? "Verified, and an earlier call from this subject was interrupted — its " +
+            "record has been carried forward and is listed under 'resumed'. Do NOT " +
+            "start again. Acknowledge briefly that you spoke earlier, then continue " +
+            "from where it stopped: skip anything already recorded and pick up at the " +
+            "first unanswered item. Re-asking a sick person questions they already " +
+            "answered is how a check-in gets abandoned."
+          : "Verified. The baseline conditions listed above are already documented — " +
+            "do not record them as new adverse events unless the subject reports they " +
+            "have worsened. Proceed to step 2 and ask how they have been feeling.",
       },
     };
   },
@@ -813,41 +928,89 @@ const handlers: Record<string, Handler> = {
       "record_concomitant_medication",
     );
 
+    const name = String(input.name ?? "");
+    // Idempotent on the drug name: a redial or a retried turn must not put the
+    // same medication in the record twice, which would read as two prescriptions.
+    const existing = session.conMeds.find(
+      (m) => naturalKey(m.name) === naturalKey(name),
+    );
+
     const record = {
-      id: nextConMedId(session),
-      name: String(input.name ?? ""),
-      indicationVerbatim: indication ?? "",
+      id: existing?.id ?? nextConMedId(session),
+      name,
+      indicationVerbatim: indication ?? existing?.indicationVerbatim ?? "",
       startedDescription: String(input.started_description ?? ""),
       recordedAt: new Date().toISOString(),
     };
-    session.conMeds.push(record);
-    session.audit.record({
-      actor: "agent",
-      action: "CONMED_RECORDED",
-      entity: "ConcomitantMedication",
-      entityId: record.id,
-      after: record,
-      reason: "New concomitant medication reported by subject.",
-    });
+
+    if (existing) {
+      const before = { ...existing };
+      Object.assign(existing, record);
+      session.audit.record({
+        actor: "agent",
+        action: "CONMED_UPDATED",
+        entity: "ConcomitantMedication",
+        entityId: record.id,
+        before,
+        after: { ...existing },
+        reason:
+          "Medication already on this record; updated rather than duplicated.",
+      });
+    } else {
+      session.conMeds.push(record);
+      session.audit.record({
+        actor: "agent",
+        action: "CONMED_RECORDED",
+        entity: "ConcomitantMedication",
+        entityId: record.id,
+        after: record,
+        reason: "New concomitant medication reported by subject.",
+      });
+    }
+
     return {
       result: {
         conmed_id: record.id,
         recorded: true,
-        instruction:
-          "Recorded. Ask whether there are any others, then move to step 7.",
+        was_already_recorded: Boolean(existing),
+        instruction: existing
+          ? "Already on the record — updated rather than added again. Ask whether " +
+            "there are any others, then move to step 8."
+          : "Recorded. Ask whether there are any others, then move to step 8.",
       },
     };
   },
 
   escalate_to_coordinator(session, input) {
     const urgency = String(input.urgency ?? "routine") as EscalationUrgency;
+    const reasonText = String(input.reason ?? "");
+
+    // Idempotent on urgency plus reason. A redial or a retried turn must not
+    // show two pages for one event — a coordinator counting escalations is
+    // counting things that happened to a person.
+    const duplicate = session.escalations.find(
+      (e) => naturalKey(e.urgency, e.reason) === naturalKey(urgency, reasonText),
+    );
+    if (duplicate) {
+      return {
+        result: {
+          escalation_id: duplicate.id,
+          urgency: duplicate.urgency,
+          already_raised: true,
+          instruction:
+            "This escalation is already on the record from earlier in the call — " +
+            "nothing further was raised. Continue.",
+        },
+      };
+    }
+
     const relatedRaw = Array.isArray(input.related_event_ids)
       ? input.related_event_ids
       : [];
     const record = {
       id: nextEscalationId(session),
       urgency,
-      reason: String(input.reason ?? ""),
+      reason: reasonText,
       relatedEventIds: relatedRaw.map(String),
       triggeredBy: "agent" as const,
       category: null,
@@ -921,17 +1084,17 @@ const handlers: Record<string, Handler> = {
   },
 };
 
-export function executeTool(
+export async function executeTool(
   session: CheckInSession,
   name: string,
   input: unknown,
-): ToolOutcome {
+): Promise<ToolOutcome> {
   const handler = handlers[name];
   if (!handler) {
     return { result: { error: `Unknown tool: ${name}` }, isError: true };
   }
   try {
-    return handler(session, (input ?? {}) as Record<string, unknown>);
+    return await handler(session, (input ?? {}) as Record<string, unknown>);
   } catch (err) {
     return {
       result: {

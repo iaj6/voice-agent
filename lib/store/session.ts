@@ -97,6 +97,15 @@ export interface CheckInSession {
   provenanceRejections: number;
   /** Fingerprints of refused quotes, so a retry is not counted twice. */
   refusedQuotes: string[];
+  /**
+   * Whether a later call may claim this session's record as a dropped call.
+   *
+   * True for anything a participant is on the end of. The eval harness opts out:
+   * it runs many independent calls from three fixed subjects back to back, so
+   * every persona that stops mid-call would otherwise be resumed by the next
+   * run and carry its adverse events across.
+   */
+  resumable: boolean;
   adverseEvents: AdverseEventRecord[];
   safetyScreen: SafetyScreenRecord | null;
   adherence: AdherenceRecord | null;
@@ -116,8 +125,15 @@ export interface CheckInSession {
  * a call that cannot survive a restart is not something a participant should be
  * on the other end of.
  */
-export async function createSession(): Promise<CheckInSession> {
-  return getSessionStore().create();
+export async function createSession(
+  options: { resumable?: boolean } = {},
+): Promise<CheckInSession> {
+  const session = await getSessionStore().create();
+  if (options.resumable === false) {
+    session.resumable = false;
+    await getSessionStore().save(session);
+  }
+  return session;
 }
 
 export async function getSession(id: string): Promise<CheckInSession | null> {
