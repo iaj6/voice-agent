@@ -1,13 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { AuditEntry, AuditTrail } from "./audit";
-import { getSessionStore } from "./session-store";
-import type { Subject } from "@/lib/clinical/protocol";
+import type { AuditEntry, AuditTrail } from "./audit.ts";
+import { getSessionStore } from "./session-store.ts";
+import type { Subject } from "../clinical/protocol.ts";
 import type {
   CtcaeGrade,
   EscalationUrgency,
   SaeCriterion,
   SeriousnessDetermination,
-} from "@/lib/clinical/safety";
+} from "../clinical/safety.ts";
 
 export interface AdverseEventRecord {
   id: string;
@@ -85,6 +85,16 @@ export interface CheckInSession {
   subject: Subject | null;
   verificationAttempts: number;
   messages: Anthropic.Beta.BetaMessageParam[];
+  /**
+   * Everything the subject actually said this call, in order.
+   *
+   * The ground truth for the provenance check. Kept separately from `messages`
+   * because that array also holds tool results and the synthetic call-start turn,
+   * and a check that cannot tell those apart from real speech is no check at all.
+   */
+  subjectUtterances: string[];
+  /** Verbatim writes refused as unfounded. A rising count means trouble. */
+  provenanceRejections: number;
   adverseEvents: AdverseEventRecord[];
   safetyScreen: SafetyScreenRecord | null;
   adherence: AdherenceRecord | null;

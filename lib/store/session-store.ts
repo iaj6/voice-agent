@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { AuditTrail, type AuditEntry } from "./audit";
-import { getDb, isDatabaseConfigured } from "./db";
-import type { CheckInSession } from "./session";
+import { AuditTrail, type AuditEntry } from "./audit.ts";
+import { getDb, isDatabaseConfigured } from "./db.ts";
+import type { CheckInSession } from "./session.ts";
 
 /**
  * Where check-in sessions live.
@@ -29,6 +29,8 @@ interface StoredRecord {
   solicitedReviewed: CheckInSession["solicitedReviewed"];
   subject: CheckInSession["subject"];
   verificationAttempts: number;
+  subjectUtterances: string[];
+  provenanceRejections: number;
 }
 
 function toRecord(session: CheckInSession): StoredRecord {
@@ -41,6 +43,8 @@ function toRecord(session: CheckInSession): StoredRecord {
     solicitedReviewed: session.solicitedReviewed,
     subject: session.subject,
     verificationAttempts: session.verificationAttempts,
+    subjectUtterances: session.subjectUtterances,
+    provenanceRejections: session.provenanceRejections,
   };
 }
 
@@ -52,6 +56,8 @@ function blankSession(id: string): CheckInSession {
     subject: null,
     verificationAttempts: 0,
     messages: [],
+    subjectUtterances: [],
+    provenanceRejections: 0,
     adverseEvents: [],
     safetyScreen: null,
     adherence: null,
@@ -135,6 +141,8 @@ class PostgresSessionStore implements SessionStore {
       subject: record.subject ?? null,
       verificationAttempts: record.verificationAttempts ?? 0,
       messages: (row.messages ?? []) as CheckInSession["messages"],
+      subjectUtterances: record.subjectUtterances ?? [],
+      provenanceRejections: record.provenanceRejections ?? 0,
       adverseEvents: record.adverseEvents ?? [],
       safetyScreen: record.safetyScreen ?? null,
       adherence: record.adherence ?? null,

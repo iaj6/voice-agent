@@ -1,4 +1,4 @@
-import { PROTOCOL } from "@/lib/clinical/protocol";
+import { PROTOCOL } from "../clinical/protocol.ts";
 
 /**
  * Utterances the agent must deliver word for word.

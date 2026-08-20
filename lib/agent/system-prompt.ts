@@ -1,5 +1,5 @@
-import { PROTOCOL } from "@/lib/clinical/protocol";
-import { CTCAE_GRADES, SAE_CRITERIA } from "@/lib/clinical/safety";
+import { PROTOCOL } from "../clinical/protocol.ts";
+import { CTCAE_GRADES, SAE_CRITERIA } from "../clinical/safety.ts";
 import {
   FIXED_ADHERENCE,
   FIXED_ANYTHING_ELSE,
@@ -12,7 +12,7 @@ import {
   FIXED_SELF_CARE_PROBE,
   FIXED_VERIFICATION_EXHAUSTED,
   FIXED_VERIFICATION_FAILED,
-} from "./fixed-speech";
+} from "./fixed-speech.ts";
 
 /**
  * The system prompt is deliberately static — no timestamps, no subject data, no

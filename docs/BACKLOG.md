@@ -63,7 +63,7 @@ gap more expensive to close.
 | 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | todo |
 | 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | todo |
 | 1.6 | Retention and legal-hold posture documented | C | Reviewed | todo |
-| 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **todo — priority** |
+| 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **done — needs review** |
 | 1.8 | Versioned migrations | A | Schema changes are ordered and replayable, not idempotent DDL | todo |
 
 ---
@@ -153,7 +153,10 @@ produces it.*
 
 ---
 
-## Open incident — fabricated content reaching the record
+## Closed incident — fabricated content reaching the record
+
+**Resolved 2026-08-20 by item 1.7.** Kept here because the reasoning is the useful
+part, not the outcome.
 
 Observed during 1.2 verification, 2026-08-20. On the open-ended question turn, the agent
 generated a patient reply for itself, then **recorded an adverse event from its own
@@ -166,14 +169,24 @@ prefixes. **None of them held.** The leaked fragment was `useh`, meaning the mod
 `use` followed by ordinary text rather than completing `user`, so no stop sequence matched
 and the hold-back correctly released it.
 
-Every existing mitigation guards the *channel*. Item 1.7 guards the *destination*: before
-any eCRF write, check that the `verbatim` text the tool was given actually appears in
-something the subject said this call. A deterministic provenance check would have rejected
-the Dizziness entry regardless of why the model produced it, which is the difference between
-guarding a route and guarding the record.
+Every existing mitigation guarded the *channel*. `lib/clinical/provenance.ts` guards the
+*destination*: before any eCRF write, the `verbatim` text is checked against what the
+subject actually said this call, and unfounded content is refused whatever produced it. It
+does not need to know why the model went wrong.
 
-Severity: highest in the register. A falsified entry is worse than a missed one — a miss is
-a gap, a fabrication is a lie in a regulated record with a participant's name on it.
+Measured separation is wide — the fabricated Dizziness quote scores 0.00, genuine captures
+including heavily trimmed ones score 0.80 to 1.00 — so the 0.6 threshold sits in the middle
+of a gap rather than on an edge. All four verbatim writers are gated. Refusals are recorded
+in the audit trail rather than dropped, because a refused write is evidence the model tried
+to enter unfounded content, and three refusals escalate to a human: one is a slip, three
+means the conversation the agent believes it is having is not the one taking place.
+
+Observed working in an eval run: the model fabricated an elaborate reply about headaches and
+vision loss, the gate refused the write, and the agent asked the subject to describe the
+symptom again instead. Zero adverse events recorded.
+
+Severity was highest in the register. A falsified entry is worse than a missed one — a miss
+is a gap, a fabrication is a lie in a regulated record with a participant's name on it.
 
 ## Deliberately not in these sprints
 
@@ -190,5 +203,6 @@ Append one line per sprint close: what shipped, what moved, what the gate said.
 
 | Date | Sprint | Outcome |
 |---|---|---|
+| 2026-08-20 | 1 | 1.7 done. Provenance gate on all four verbatim writers; refusals audited, three escalate. Fabrications score 0.00 against genuine captures at 0.80–1.00, so the 0.6 threshold sits in a wide gap. Also fixed all 11 code-review findings, two HIGH — ConText scopes crossed clause boundaries and suppressed four real emergencies; a screen answer corrected no→yes never escalated. lib/ converted to relative imports so the write path is testable without a build. 55 unit tests. |
 | 2026-08-20 | 1 | 1.1–1.3 done. Neon provisioned (free, iad1, auth off). Append-only enforced by trigger, verified: UPDATE and DELETE both rejected, cleanup required disabling them. **Postgres reorders JSONB keys**, which broke the hash chain on read-back — fixed with canonical serialisation, three tests added. SIGKILL mid-call then cold restart: subject, 1 AE, 3 escalations, 13 audit entries, chain valid — identical. **Observed a falsified eCRF entry** (see 1.7). |
 | 2026-08-20 | 0 | 0.1 and 0.5 done. `npm run verify` runs in ~3.3s and was proven to fail: removing two chest-pain patterns dropped sensitivity to 47.1% and the gate caught it. Floors set at sensitivity ≥50%, specificity =100%. |

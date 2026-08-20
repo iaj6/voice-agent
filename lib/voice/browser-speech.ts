@@ -5,7 +5,7 @@ import type {
   SpeechRecognizer,
   SpeechSynthesizer,
   SynthesizerCallbacks,
-} from "./types";
+} from "./types.ts";
 
 // The Web Speech API is still not in lib.dom under every TS config, and Chrome
 // only exposes the prefixed constructor. Declare the slice we actually use.

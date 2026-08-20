@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assessContext, suppressionReason, tokenize } from "../lib/clinical/context.ts";
 import { scanForSafetySignals, assertedHits } from "../lib/clinical/safety.ts";
+import { checkProvenance } from "../lib/clinical/provenance.ts";
 
 /** Locates a concept in an utterance and returns its context reading. */
 function read(text: string, concept: string) {
@@ -198,4 +199,58 @@ test("a negated list separated by commas stays negated", () => {
     assertedHits(scanForSafetySignals("no fever, no chills, no bleeding")).length,
     0,
   );
+});
+
+// --- provenance --------------------------------------------------------------
+// The eCRF once received "AE-001 Dizziness G2" with the verbatim quote "the
+// kitchen sort of went sideways on me" — words no subject spoke. Every guard in
+// place at the time protected the channel; none protected the destination.
+test("refuses a quote with no basis in the transcript", () => {
+  const spoken = [
+    "I've been very tired, I couldn't shower Tuesday, my daughter had to help me",
+  ];
+  const v = checkProvenance(
+    "the kitchen sort of went sideways on me, I had to grab the counter",
+    spoken,
+  );
+  assert.equal(v.grounded, false);
+  assert.equal(v.score, 0);
+  assert.match(v.reason ?? "", /appears in what the subject actually said/);
+});
+
+test("accepts a genuine capture, including a trimmed one", () => {
+  const spoken = [
+    "I've been very tired, I couldn't shower Tuesday, my daughter had to help me",
+  ];
+  for (const quote of [
+    "I've been very tired, I couldn't shower Tuesday, my daughter had to help me",
+    "very tired, couldn't shower Tuesday",
+    "couldn't shower, daughter had to help",
+    "tired; showering needed help from my daughter",
+  ]) {
+    assert.equal(checkProvenance(quote, spoken).grounded, true, `refused: ${quote}`);
+  }
+});
+
+test("short answers are not judged", () => {
+  // "Yes" / "None" / "about eight" carry clinical meaning and cannot be scored.
+  for (const quote of ["yes", "none", "about eight"]) {
+    assert.equal(checkProvenance(quote, ["No, none at all."]).grounded, true);
+  }
+});
+
+test("nothing is quotable before the subject has spoken", () => {
+  const v = checkProvenance("I have had chest pain since last night", []);
+  assert.equal(v.grounded, false);
+  assert.match(v.reason ?? "", /has not said anything yet/);
+});
+
+test("the synthetic call-start turn is not quotable", () => {
+  // It is our text, not the subject's. Quoting it back would be fabrication
+  // dressed as transcription.
+  const v = checkProvenance(
+    "The call has connected and the subject has not spoken yet",
+    [],
+  );
+  assert.equal(v.grounded, false);
 });

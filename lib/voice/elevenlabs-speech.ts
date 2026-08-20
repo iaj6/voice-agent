@@ -1,7 +1,7 @@
 "use client";
 
-import type { SpeechSynthesizer, SynthesizerCallbacks } from "./types";
-import { SYNTHESIS_TIMEOUT_MS } from "./tts-config";
+import type { SpeechSynthesizer, SynthesizerCallbacks } from "./types.ts";
+import { SYNTHESIS_TIMEOUT_MS } from "./tts-config.ts";
 
 /**
  * Neural speech via the server-side /api/speech route, with local browser

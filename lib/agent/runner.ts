@@ -1,21 +1,21 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Agent, fetch as undiciFetch } from "undici";
-import { SYSTEM_PROMPT } from "./system-prompt";
-import { TOOLS, executeTool } from "./tools";
-import { SentenceChunker } from "./sentence-chunker";
+import { SYSTEM_PROMPT } from "./system-prompt.ts";
+import { TOOLS, executeTool } from "./tools.ts";
+import { SentenceChunker } from "./sentence-chunker.ts";
 import {
   assertedHits,
   highestUrgency,
   scanForSafetySignals,
   type SafetyNetHit,
-} from "@/lib/clinical/safety";
-import { PROTOCOL } from "@/lib/clinical/protocol";
+} from "../clinical/safety.ts";
+import { PROTOCOL } from "../clinical/protocol.ts";
 import {
   nextEscalationId,
   saveSession,
   snapshot,
   type CheckInSession,
-} from "@/lib/store/session";
+} from "../store/session.ts";
 
 /**
  * A dedicated HTTP/1.1 connection pool, not the process-global one.
@@ -245,6 +245,10 @@ export async function* runTurn(
   });
 
   session.messages.push({ role: "user", content: utterance });
+
+  // Ground truth for the provenance check. Only genuine subject speech — the
+  // synthetic call-start turn is ours and must never be quotable.
+  if (source === "subject") session.subjectUtterances.push(utterance);
 
   if (hits.length > 0) {
     const urgency = highestUrgency(hits)!;
