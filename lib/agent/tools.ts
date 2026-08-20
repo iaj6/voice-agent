@@ -422,8 +422,15 @@ const handlers: Record<string, Handler> = {
     // Deterministic escalation, the instant the answer lands. No model judgment
     // stands between the subject saying yes and a coordinator being paged, and it
     // does not wait for the rest of the screen to finish.
+    //
+    // Gated on the PRIOR ANSWER, not on whether a prior record exists. Gating on
+    // existence meant a subject who said "no" and then corrected to "yes" — the
+    // single most important correction they can make — updated the record and
+    // paged nobody. The prompt tells the agent not to escalate screen items
+    // itself, so nothing downstream caught it either.
+    const wasAlreadyPositive = before?.answer === true;
     let raised: string | null = null;
-    if (isRedFlag && !before) {
+    if (isRedFlag && !wasAlreadyPositive) {
       const escalation = {
         id: nextEscalationId(session),
         urgency: item.urgencyIfPositive,
@@ -493,7 +500,23 @@ const handlers: Record<string, Handler> = {
     }
 
     const codedTerm = String(input.coded_term ?? "").trim();
-    const grade = Number(input.grade) as CtcaeGrade;
+
+    // Validated before anything is written. The schema is strict, so reaching
+    // this needs a schema-enforcement gap — but if it happens, throwing later
+    // leaves an AE_RECORDED audit entry for a call that reported failure, and
+    // the model re-records it. Refuse first, mutate second.
+    const rawGrade = Number(input.grade);
+    if (!Number.isInteger(rawGrade) || rawGrade < 1 || rawGrade > 5) {
+      return {
+        result: {
+          error:
+            `Grade ${JSON.stringify(input.grade)} is not a CTCAE grade. ` +
+            "Use an integer 1 through 5. Nothing was recorded.",
+        },
+        isError: true,
+      };
+    }
+    const grade = rawGrade as CtcaeGrade;
 
     // Re-record of an existing term is a correction, not a duplicate event.
     const existing = session.adverseEvents.find(
@@ -543,6 +566,9 @@ const handlers: Record<string, Handler> = {
     if (!session.solicitedReviewed.includes(codedTerm)) {
       session.solicitedReviewed.push(codedTerm);
     }
+    // NOTE: recording an event is not the only way a symptom gets reviewed —
+    // markSolicitedAsked() in the runner marks the ones answered "no", which are
+    // the majority. See lib/agent/runner.ts.
 
     const needsEscalation = grade >= ESCALATION_GRADE_THRESHOLD;
     return {
