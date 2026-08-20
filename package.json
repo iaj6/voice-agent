@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3100",
     "lint": "eslint",
-    "test": "node --test \"tests/*.test.ts\"",
+    "test": "node --test --env-file-if-exists=.env.local --import ./tests/helpers/isolate-db.ts \"tests/*.test.ts\"",
     "warm-speech": "node scripts/warm-speech.mjs",
     "measure-net": "node scripts/measure-net.mjs",
     "eval": "node scripts/simulate.mjs",

@@ -27,3 +27,12 @@ export function getDb(): NeonQueryFunction<false, false> {
   }
   return handle;
 }
+
+/**
+ * Test seam. Drops the cached handle so a later getDb() rebuilds it from the
+ * current DATABASE_URL — which is how a test points the store at a scratch
+ * database instead of the real one.
+ */
+export function __resetDb(): void {
+  handle = null;
+}

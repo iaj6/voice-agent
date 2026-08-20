@@ -14,6 +14,7 @@ function sessionWith(utterances: string[]): CheckInSession {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     status: "in_progress" as const,
     subject: SUBJECTS[0],
     verificationAttempts: 1,

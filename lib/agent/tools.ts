@@ -16,7 +16,7 @@ import {
   nextEventId,
   type CheckInSession,
 } from "../store/session.ts";
-import { RESUME_WINDOW_MS, getSessionStore } from "../store/session-store.ts";
+import { getSessionStore } from "../store/session-store.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -416,60 +416,82 @@ function naturalKey(...parts: (string | null | undefined)[]): string {
  *
  * A call that drops after an adverse event is captured leaves that event in a
  * session nobody will look at again, and the subject — who has already described
- * it once — is asked to describe it a second time. Both are bad: a stranded
- * reportable event is a compliance gap, and re-interrogating someone who is
- * unwell is how a check-in gets abandoned halfway.
+ * it once — is asked to describe it a second time. A stranded reportable event
+ * is a compliance gap; re-interrogating someone who is unwell is how a check-in
+ * gets abandoned halfway.
  *
- * The prior session is locked afterwards, so its content cannot be claimed twice.
- * Its own audit trail stays with it and this one records the transfer, so both
- * halves of an interrupted call remain reconstructable.
+ * Order matters. The successor is persisted with the carried record BEFORE the
+ * source is closed, so a crash in between leaves the source claimable rather
+ * than closed-and-empty. Locking first meant the exact failure this feature
+ * exists for — a process dying mid-call — could strand the data permanently,
+ * reachable only by someone reading the database by hand.
  */
 async function resumeDroppedCall(
   session: CheckInSession,
   subjectId: string,
-): Promise<{
-  from: string;
-  startedAt: string;
-  adverseEvents: number;
-  screenItems: number;
-  conMeds: number;
-  escalations: number;
-  adherenceRecorded: boolean;
-} | null> {
+): Promise<Record<string, unknown> | null> {
   const store = getSessionStore();
-  const prior = await store.findResumable(subjectId, RESUME_WINDOW_MS, session.id);
+  const prior = await store.claimResumable(subjectId, session.id);
   if (!prior) return null;
+
+  // Deep copies. Sharing structure with a record that is about to be closed let
+  // later writes mutate the closed one — an emergency-tier screen answer once
+  // appeared inside a locked session with no matching audit entry, so the record
+  // contradicted its own trail. The hash chain cannot see that; it arrives
+  // through the object graph, not through the log.
+  session.adverseEvents = structuredClone(prior.adverseEvents);
+  session.safetyScreen = structuredClone(prior.safetyScreen);
+  session.adherence = structuredClone(prior.adherence);
+  session.conMeds = structuredClone(prior.conMeds);
+  session.escalations = structuredClone(prior.escalations);
+  session.solicitedReviewed = [...prior.solicitedReviewed];
+
+  // Prior speech comes too: without it the provenance gate would refuse a quote
+  // of something said before the line dropped. Deduplicated, because a retried
+  // verify_subject would otherwise append the same utterances twice and inflate
+  // the corpus the gate scores against.
+  session.subjectUtterances = [
+    ...new Set([...prior.subjectUtterances, ...session.subjectUtterances]),
+  ];
+
+  // The fabrication counter travels too. Two unfounded quotes before the drop
+  // and two after would otherwise never reach the escalation threshold that a
+  // single continuous call would have crossed.
+  session.provenanceRejections = prior.provenanceRejections;
+  session.refusedQuotes = [...prior.refusedQuotes];
+
+  if (prior.status === "escalated") session.status = "escalated";
 
   const carried = {
     from: prior.id,
-    startedAt: prior.createdAt,
-    adverseEvents: prior.adverseEvents.length,
-    screenItems: prior.safetyScreen?.items.length ?? 0,
-    conMeds: prior.conMeds.length,
-    escalations: prior.escalations.length,
-    adherenceRecorded: prior.adherence !== null,
+    started_at: prior.createdAt,
+    // Identities, not counts. The instruction tells the agent to pick up at the
+    // first unanswered item; counts alone force it to guess, and guessing
+    // protocol order skips a red-flag screen item that was never asked.
+    adverse_events: session.adverseEvents.map((e) => ({
+      id: e.id,
+      coded_term: e.codedTerm,
+      grade: e.grade,
+    })),
+    screen_items_answered: (session.safetyScreen?.items ?? []).map((i) => ({
+      item_id: i.itemId,
+      answer: i.answer,
+    })),
+    concomitant_medications: session.conMeds.map((m) => m.name),
+    escalations: session.escalations.map((e) => ({
+      id: e.id,
+      urgency: e.urgency,
+    })),
+    adherence_recorded: session.adherence !== null,
+    solicited_symptoms_reviewed: [...session.solicitedReviewed],
   };
 
   const nothingToCarry =
-    carried.adverseEvents === 0 &&
-    carried.screenItems === 0 &&
-    carried.conMeds === 0 &&
-    carried.escalations === 0 &&
-    !carried.adherenceRecorded;
-
-  session.adverseEvents = [...prior.adverseEvents];
-  session.safetyScreen = prior.safetyScreen;
-  session.adherence = prior.adherence;
-  session.conMeds = [...prior.conMeds];
-  session.escalations = [...prior.escalations];
-  session.solicitedReviewed = [...prior.solicitedReviewed];
-  // Prior speech comes too: without it the provenance gate would refuse a quote
-  // of something the subject said before the line dropped.
-  session.subjectUtterances = [
-    ...prior.subjectUtterances,
-    ...session.subjectUtterances,
-  ];
-  if (prior.status === "escalated") session.status = "escalated";
+    carried.adverse_events.length === 0 &&
+    carried.screen_items_answered.length === 0 &&
+    carried.concomitant_medications.length === 0 &&
+    carried.escalations.length === 0 &&
+    !carried.adherence_recorded;
 
   session.audit.record({
     actor: "system",
@@ -479,15 +501,12 @@ async function resumeDroppedCall(
     after: carried,
     reason:
       "An earlier check-in for this subject was interrupted within the resume " +
-      "window. Its record was carried forward and the earlier session locked.",
+      "window and had been idle. Its record was carried forward.",
   });
 
-  // Lock the source so the same content cannot be carried forward twice.
-  prior.completedAt = new Date().toISOString();
-  prior.status = prior.status === "escalated" ? "escalated" : "completed";
-  prior.summary =
-    (prior.summary ?? "") +
-    ` [Interrupted; record carried forward into session ${session.id}.]`;
+  // Persist the successor first. Only then close the source.
+  await getSessionStore().save(session);
+
   prior.audit.record({
     actor: "system",
     action: "SESSION_SUPERSEDED",
@@ -498,7 +517,7 @@ async function resumeDroppedCall(
       "Call was interrupted and the subject redialled. This record was carried " +
       "forward and this session is closed to further writes.",
   });
-  await store.save(prior);
+  await store.supersede(prior, session.id);
 
   return nothingToCarry ? null : carried;
 }
@@ -912,8 +931,8 @@ const handlers: Record<string, Handler> = {
         instruction:
           missed > 0
             ? "Missed doses recorded. Do not correct, coach, or express " +
-              "disappointment. Move to step 6."
-            : "Recorded. Move to step 6.",
+              "disappointment. Move to step 7."
+            : "Recorded. Move to step 7.",
       },
     };
   },
@@ -935,11 +954,19 @@ const handlers: Record<string, Handler> = {
       (m) => naturalKey(m.name) === naturalKey(name),
     );
 
+    const startedDescription = String(input.started_description ?? "");
     const record = {
       id: existing?.id ?? nextConMedId(session),
-      name,
+      // Keep the first call's values where the second is emptier or vaguer. A
+      // subject repeating a medication on redial says less about it, not more,
+      // and overwriting "since Tuesday" with "a while back" loses information
+      // the record already had.
+      name: existing?.name ?? name,
       indicationVerbatim: indication ?? existing?.indicationVerbatim ?? "",
-      startedDescription: String(input.started_description ?? ""),
+      startedDescription:
+        startedDescription.trim() !== ""
+          ? startedDescription
+          : (existing?.startedDescription ?? ""),
       recordedAt: new Date().toISOString(),
     };
 
@@ -985,33 +1012,60 @@ const handlers: Record<string, Handler> = {
     const urgency = String(input.urgency ?? "routine") as EscalationUrgency;
     const reasonText = String(input.reason ?? "");
 
-    // Idempotent on urgency plus reason. A redial or a retried turn must not
-    // show two pages for one event — a coordinator counting escalations is
-    // counting things that happened to a person.
+    const relatedRaw = Array.isArray(input.related_event_ids)
+      ? input.related_event_ids
+      : [];
+    const relatedIds = relatedRaw.map(String);
+
+    // Idempotent on urgency, reason AND the events it concerns. A redial or a
+    // retried turn must not show two pages for one event — a coordinator
+    // counting escalations is counting things that happened to a person — but
+    // two different events escalated with the same stock phrase are two events,
+    // and collapsing them loses the second one's link entirely.
     const duplicate = session.escalations.find(
-      (e) => naturalKey(e.urgency, e.reason) === naturalKey(urgency, reasonText),
+      (e) =>
+        naturalKey(e.urgency, e.reason, [...e.relatedEventIds].sort().join(",")) ===
+        naturalKey(urgency, reasonText, [...relatedIds].sort().join(",")),
     );
     if (duplicate) {
+      // Audited, like the other two idempotency paths. A page that was requested
+      // and not raised is otherwise invisible to anyone reconstructing the call.
+      session.audit.record({
+        actor: "system",
+        action: "ESCALATION_SUPPRESSED_DUPLICATE",
+        entity: "Escalation",
+        entityId: duplicate.id,
+        after: { urgency, reason: reasonText, relatedEventIds: relatedIds },
+        reason:
+          "An identical escalation was already raised on this record; a second " +
+          "was not created.",
+      });
       return {
         result: {
           escalation_id: duplicate.id,
           urgency: duplicate.urgency,
           already_raised: true,
+          // Branches on urgency exactly as the fresh path does. Returning a bare
+          // "continue" for a duplicate EMERGENCY told the agent to carry on with
+          // a call the protocol says must end.
           instruction:
-            "This escalation is already on the record from earlier in the call — " +
-            "nothing further was raised. Continue.",
+            duplicate.urgency === "emergency"
+              ? "Already raised, and the coordinator is already paged. Tell the " +
+                "subject in one sentence to seek emergency care now, then call " +
+                "complete_check_in with ended_early true. Ask nothing further."
+              : duplicate.urgency === "urgent"
+                ? `Already raised — ${session.subject?.coordinatorName ?? "the coordinator"} ` +
+                  "has been paged. Do not raise it again. Continue the check-in if " +
+                  "it is safe to do so."
+                : "Already flagged for routine review. Continue the check-in.",
         },
       };
     }
-
-    const relatedRaw = Array.isArray(input.related_event_ids)
-      ? input.related_event_ids
-      : [];
     const record = {
       id: nextEscalationId(session),
       urgency,
       reason: reasonText,
-      relatedEventIds: relatedRaw.map(String),
+      relatedEventIds: relatedIds,
       triggeredBy: "agent" as const,
       category: null,
       createdAt: new Date().toISOString(),

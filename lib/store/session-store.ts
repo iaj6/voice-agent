@@ -18,22 +18,39 @@ export interface SessionStore {
   get(id: string): Promise<CheckInSession | null>;
   save(session: CheckInSession): Promise<void>;
   /**
-   * The most recent unfinished check-in for a subject, if one is recent enough
-   * to be the same call.
+   * Claims the most recent *dropped* check-in for a subject, or null.
    *
-   * Time-bounded because an unfinished session from last week is a different
-   * check-in that someone abandoned, not a dropped call to resume. Resuming that
-   * would silently merge two visits into one record.
+   * Claiming rather than finding: the lookup and the reservation have to be one
+   * operation. Two redials landing together — a retried webhook, a subject
+   * dialling twice — otherwise both see an unclaimed session and both carry the
+   * same adverse events forward into two records.
+   *
+   * Bounded two ways. By age, because an unfinished session from last week is an
+   * abandoned check-in rather than a dropped call, and merging those merges two
+   * visits into one record. And by idleness, because a session with a write
+   * seconds ago is not dropped — it is a call that is still happening, and
+   * claiming it locks a participant's live record out from under them.
    */
-  findResumable(
+  claimResumable(
     subjectId: string,
-    withinMs: number,
     excludeId: string,
   ): Promise<CheckInSession | null>;
+  /** Marks a claimed session closed once its record has been carried forward. */
+  supersede(session: CheckInSession, successorId: string): Promise<void>;
 }
 
 /** How long after a drop a redial still counts as the same check-in. */
 export const RESUME_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * A session written to more recently than this is treated as live, not dropped.
+ *
+ * Turns must not exceed it silently — a slow tool loop can take tens of seconds,
+ * so this is generous. The cost of guessing wrong in this direction is a redial
+ * that starts fresh; the cost in the other direction is locking a call that is
+ * still in progress.
+ */
+export const RESUME_IDLE_MS = 90_000;
 
 /** The clinical record, separated from the conversation for storage. */
 interface StoredRecord {
@@ -72,6 +89,7 @@ function blankSession(id: string): CheckInSession {
   return {
     id,
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     status: "awaiting_verification",
     subject: null,
     verificationAttempts: 0,
@@ -105,6 +123,27 @@ function openingEntry(session: CheckInSession) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Detaches a session from whatever else holds a reference to it.
+ *
+ * The in-memory store used to hand out live objects, which made it a poor stand-in
+ * for a database: two callers "loading" the same session got the same object, so a
+ * write through one appeared in the other with no save and no audit entry. That is
+ * not a hypothetical — a locked record gained an emergency-tier screen answer that
+ * way, and its own hash chain could not see it, because the mutation never went
+ * through the log.
+ *
+ * A store that copies on the way in and out has the same semantics as Postgres,
+ * so tests written against it mean what they appear to mean.
+ */
+function detach(session: CheckInSession): CheckInSession {
+  const entries = [...session.audit.all()].map((e) => ({ ...e }));
+  return {
+    ...structuredClone({ ...session, audit: undefined }),
+    audit: AuditTrail.rehydrate(session.id, entries),
+  } as CheckInSession;
+}
+
 class MemorySessionStore implements SessionStore {
   readonly kind = "memory" as const;
   private sessions = new Map<string, CheckInSession>();
@@ -112,38 +151,69 @@ class MemorySessionStore implements SessionStore {
   async create(): Promise<CheckInSession> {
     const session = blankSession(randomUUID());
     openingEntry(session);
-    this.sessions.set(session.id, session);
+    this.sessions.set(session.id, detach(session));
     return session;
   }
 
   async get(id: string): Promise<CheckInSession | null> {
-    return this.sessions.get(id) ?? null;
+    const stored = this.sessions.get(id);
+    return stored ? detach(stored) : null;
   }
 
   async save(session: CheckInSession): Promise<void> {
-    this.sessions.set(session.id, session);
+    const stored = this.sessions.get(session.id);
+    if (stored && stored.completedAt !== null && session.completedAt === null) {
+      throw new Error(
+        `Session ${session.id} was closed by another process while this call was ` +
+          "still in progress. Writes since then were not saved.",
+      );
+    }
+    session.updatedAt = new Date().toISOString();
+    this.sessions.set(session.id, detach(session));
   }
 
-  async findResumable(
+  async claimResumable(
     subjectId: string,
-    withinMs: number,
     excludeId: string,
   ): Promise<CheckInSession | null> {
-    const cutoff = Date.now() - withinMs;
-    const candidates = [...this.sessions.values()]
+    const ageCutoff = Date.now() - RESUME_WINDOW_MS;
+    const idleCutoff = Date.now() - RESUME_IDLE_MS;
+    const candidate = [...this.sessions.values()]
       .filter(
         (s) =>
           s.id !== excludeId &&
           s.completedAt === null &&
           s.resumable &&
           s.subject?.subjectId === subjectId &&
-          new Date(s.createdAt).getTime() >= cutoff,
+          new Date(s.createdAt).getTime() >= ageCutoff &&
+          new Date(s.updatedAt).getTime() <= idleCutoff,
       )
       .sort(
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      );
-    return candidates[0] ?? null;
+      )[0];
+    if (!candidate) return null;
+    // Touching it is the lease: a concurrent claimer now sees it as live.
+    candidate.updatedAt = new Date().toISOString();
+    return detach(candidate);
+  }
+
+  async supersede(session: CheckInSession, successorId: string): Promise<void> {
+    session.completedAt = new Date().toISOString();
+    session.status = session.status === "escalated" ? "escalated" : "completed";
+    session.summary =
+      (session.summary ?? "") +
+      ` [Interrupted; record carried forward into session ${successorId}.]`;
+    session.updatedAt = new Date().toISOString();
+    this.sessions.set(session.id, detach(session));
+  }
+
+  /** See __backdateForTest. */
+  __backdate(id: string, ms: number): void {
+    const stored = this.sessions.get(id);
+    if (stored) {
+      stored.updatedAt = new Date(Date.now() - ms).toISOString();
+    }
   }
 }
 
@@ -167,7 +237,7 @@ class PostgresSessionStore implements SessionStore {
   async get(id: string): Promise<CheckInSession | null> {
     const sql = getDb();
     const rows = await sql`
-      select id, created_at, status, record, messages, summary, completed_at
+      select id, created_at, updated_at, status, record, messages, summary, completed_at
       from check_in_session where id = ${id}`;
     if (rows.length === 0) return null;
     const row = rows[0] as Record<string, unknown>;
@@ -181,6 +251,9 @@ class PostgresSessionStore implements SessionStore {
     return {
       id: String(row.id),
       createdAt: new Date(row.created_at as string).toISOString(),
+      updatedAt: new Date(
+        (row.updated_at as string | null) ?? (row.created_at as string),
+      ).toISOString(),
       status: row.status as CheckInSession["status"],
       subject: record.subject ?? null,
       verificationAttempts: record.verificationAttempts ?? 0,
@@ -241,11 +314,20 @@ class PostgresSessionStore implements SessionStore {
     }
 
     if (existing[0].completed_at !== null) {
-      // Already locked. Conversation after complete_check_in is not part of the
-      // record, so declining to write it is correct — but the audit trail is
-      // append-only and still accepts entries, so it is written regardless.
       await this.appendAudit(session);
-      return;
+
+      // Locked by us, via complete_check_in: conversation after the record
+      // closes is not part of it, so declining to write is correct.
+      if (session.completedAt !== null) return;
+
+      // Locked by something else while this call was still running — a redial
+      // that claimed it as dropped, most likely. Everything written since is
+      // gone. Silence here was the quiet data-loss path that save() was
+      // rewritten to eliminate; it must not come back through this door.
+      throw new Error(
+        `Session ${session.id} was closed by another process while this call was ` +
+          "still in progress. Writes since then were not saved.",
+      );
     }
 
     await sql`
@@ -258,27 +340,57 @@ class PostgresSessionStore implements SessionStore {
              completed_at = ${session.completedAt},
              updated_at = now()
        where id = ${session.id}`;
+    session.updatedAt = new Date().toISOString();
     await this.appendAudit(session);
   }
 
-  async findResumable(
+  async claimResumable(
     subjectId: string,
-    withinMs: number,
     excludeId: string,
   ): Promise<CheckInSession | null> {
     const sql = getDb();
-    const cutoff = new Date(Date.now() - withinMs).toISOString();
-    const rows = (await sql`
-      select id from check_in_session
-       where subject_id = ${subjectId}
-         and completed_at is null
-         and coalesce((record ->> 'resumable')::boolean, true)
-         and id <> ${excludeId}
-         and created_at >= ${cutoff}
-       order by created_at desc
-       limit 1`) as { id: string }[];
-    if (rows.length === 0) return null;
-    return this.get(rows[0].id);
+    const ageCutoff = new Date(Date.now() - RESUME_WINDOW_MS).toISOString();
+    const idleCutoff = new Date(Date.now() - RESUME_IDLE_MS).toISOString();
+
+    // One statement: select and lease together. Bumping updated_at makes the row
+    // non-idle, so a concurrent redial skips it instead of carrying the same
+    // record forward a second time.
+    const claimed = (await sql`
+      update check_in_session
+         set updated_at = now()
+       where id = (
+         select id from check_in_session
+          where subject_id = ${subjectId}
+            and completed_at is null
+            and coalesce((record ->> 'resumable')::boolean, true)
+            and id <> ${excludeId}
+            and created_at >= ${ageCutoff}
+            and updated_at <= ${idleCutoff}
+          order by created_at desc
+          limit 1
+          for update skip locked
+       )
+      returning id`) as { id: string }[];
+
+    if (claimed.length === 0) return null;
+    return this.get(claimed[0].id);
+  }
+
+  async supersede(session: CheckInSession, successorId: string): Promise<void> {
+    const sql = getDb();
+    const summary =
+      (session.summary ?? "") +
+      ` [Interrupted; record carried forward into session ${successorId}.]`;
+    const status = session.status === "escalated" ? "escalated" : "completed";
+    await sql`
+      update check_in_session
+         set completed_at = now(), status = ${status}, summary = ${summary},
+             updated_at = now()
+       where id = ${session.id} and completed_at is null`;
+    session.completedAt = new Date().toISOString();
+    session.status = status;
+    session.summary = summary;
+    await this.appendAudit(session);
   }
 
   /** Inserts only entries not already persisted. The table rejects rewrites. */
@@ -331,4 +443,20 @@ export function getSessionStore(): SessionStore {
 /** Test seam. */
 export function __setSessionStore(next: SessionStore | null) {
   store = next;
+}
+
+/**
+ * Ages a stored session so it reads as dropped rather than live.
+ *
+ * Test-only, and in-memory only. The idleness rule is what stops a redial
+ * locking a call that is still happening, so tests have to be able to say which
+ * of the two they mean — and they cannot do it by mutating their own copy,
+ * because the store keeps its own.
+ */
+export function __backdateForTest(id: string, ms: number): void {
+  const current = store;
+  if (!(current instanceof MemorySessionStore)) {
+    throw new Error("__backdateForTest only applies to the in-memory store");
+  }
+  current.__backdate(id, ms);
 }

@@ -81,6 +81,8 @@ export type SessionStatus = "awaiting_verification" | "in_progress" | "escalated
 export interface CheckInSession {
   id: string;
   createdAt: string;
+  /** Last write. Used to tell a dropped call from one still in progress. */
+  updatedAt: string;
   status: SessionStatus;
   subject: Subject | null;
   verificationAttempts: number;

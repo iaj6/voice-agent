@@ -2,8 +2,10 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { executeTool } from "../lib/agent/tools.ts";
 import {
+  __backdateForTest,
   __setSessionStore,
   getSessionStore,
+  RESUME_IDLE_MS,
   RESUME_WINDOW_MS,
 } from "../lib/store/session-store.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
@@ -35,13 +37,25 @@ async function callWith(utterances: string[]): Promise<CheckInSession> {
   return session;
 }
 
+/**
+ * Ages a session past the idleness threshold so it reads as dropped.
+ *
+ * A session written to seconds ago is a call still in progress, and claiming one
+ * locks a participant's live record out from under them. Tests have to say
+ * explicitly which they mean.
+ */
+async function markAsDropped(session: CheckInSession) {
+  await getSessionStore().save(session);
+  __backdateForTest(session.id, RESUME_IDLE_MS + 5_000);
+}
+
 // --- 1.4 mid-call recovery ---------------------------------------------------
 
 test("a dropped call's captures are carried into the redial", async () => {
   const first = await callWith(SPOKEN);
   await executeTool(first, "verify_subject", VERIFY);
   await executeTool(first, "record_adverse_event", AE);
-  await getSessionStore().save(first);
+  await markAsDropped(first);
   assert.equal(first.adverseEvents.length, 1);
 
   // The line drops. The subject calls back.
@@ -61,10 +75,11 @@ test("the earlier session is locked so its content cannot be claimed twice", asy
   const first = await callWith(SPOKEN);
   await executeTool(first, "verify_subject", VERIFY);
   await executeTool(first, "record_adverse_event", AE);
-  await getSessionStore().save(first);
+  await markAsDropped(first);
 
   const second = await callWith(SPOKEN);
   await executeTool(second, "verify_subject", VERIFY);
+  await markAsDropped(second);
 
   const reloaded = await getSessionStore().get(first.id);
   assert.ok(reloaded?.completedAt, "the source must be closed to further writes");
@@ -85,7 +100,7 @@ test("prior speech comes forward, so quoting it is still allowed", async () => {
   // something the subject said before the line dropped.
   const first = await callWith(SPOKEN);
   await executeTool(first, "verify_subject", VERIFY);
-  await getSessionStore().save(first);
+  await markAsDropped(first);
 
   const second = await callWith([]);
   await executeTool(second, "verify_subject", VERIFY);
@@ -101,7 +116,7 @@ test("a stale session is not resumed", async () => {
   await executeTool(first, "record_adverse_event", AE);
   // Older than the window: an abandoned check-in, not a dropped call.
   first.createdAt = new Date(Date.now() - RESUME_WINDOW_MS - 60_000).toISOString();
-  await getSessionStore().save(first);
+  await markAsDropped(first);
 
   const second = await callWith(SPOKEN);
   await executeTool(second, "verify_subject", VERIFY);
@@ -113,7 +128,7 @@ test("a session marked not-resumable is never claimed", async () => {
   first.resumable = false;
   await executeTool(first, "verify_subject", VERIFY);
   await executeTool(first, "record_adverse_event", AE);
-  await getSessionStore().save(first);
+  await markAsDropped(first);
 
   const second = await callWith(SPOKEN);
   await executeTool(second, "verify_subject", VERIFY);
@@ -127,7 +142,7 @@ test("another subject's session is never resumed", async () => {
     date_of_birth: SUBJECTS[1].dateOfBirth,
   });
   await executeTool(other, "record_adverse_event", AE);
-  await getSessionStore().save(other);
+  await markAsDropped(other);
 
   const mine = await callWith(SPOKEN);
   await executeTool(mine, "verify_subject", VERIFY);
@@ -194,7 +209,7 @@ test("a medication re-reported after a redial updates rather than duplicates", a
     indication_verbatim: "for my knee",
     started_description: "this week",
   });
-  await getSessionStore().save(first);
+  await markAsDropped(first);
 
   const second = await callWith(["I started taking ibuprofen for my knee"]);
   await executeTool(second, "verify_subject", VERIFY);
@@ -205,4 +220,141 @@ test("a medication re-reported after a redial updates rather than duplicates", a
     started_description: "this week",
   });
   assert.equal(second.conMeds.length, 1, "case and redial must not duplicate");
+});
+
+// --- findings from the third review ------------------------------------------
+
+test("a session still being written to is never claimed as dropped", async () => {
+  // The worst failure this feature can produce: two live calls for one subject,
+  // one locks the other, and every later write on the locked one is discarded.
+  const live = await callWith(SPOKEN);
+  await executeTool(live, "verify_subject", VERIFY);
+  await getSessionStore().save(live); // written to just now — this call is live
+
+  const other = await callWith(SPOKEN);
+  await executeTool(other, "verify_subject", VERIFY);
+
+  assert.equal(live.completedAt, null, "a live call must not be locked");
+  assert.equal(other.adverseEvents.length, 0, "and nothing carried from it");
+});
+
+test("being locked out mid-call is loud, not silent", async () => {
+  const session = await callWith(SPOKEN);
+  await executeTool(session, "verify_subject", VERIFY);
+  await getSessionStore().save(session);
+
+  // Something else closes it while this call is still running.
+  const store = getSessionStore();
+  const stored = await store.get(session.id);
+  assert.ok(stored);
+  await store.supersede(stored, "some-other-session");
+
+  await assert.rejects(
+    () => store.save(session),
+    /closed by another process/,
+    "silent loss here is what save() was rewritten to eliminate",
+  );
+});
+
+test("the carried record does not share structure with the closed one", async () => {
+  // An emergency-tier screen answer once appeared inside a locked record with no
+  // matching audit entry, because the carried objects were the same objects.
+  const first = await callWith(SPOKEN);
+  await executeTool(first, "verify_subject", VERIFY);
+  await executeTool(first, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: false,
+    verbatim: null,
+  });
+  await markAsDropped(first);
+
+  const second = await callWith(SPOKEN);
+  await executeTool(second, "verify_subject", VERIFY);
+  await executeTool(second, "record_safety_screen_item", {
+    item_id: "chest_or_breathing",
+    answer: true,
+    verbatim: null,
+  });
+
+  const closed = await getSessionStore().get(first.id);
+  assert.ok(
+    !closed?.safetyScreen?.items.some((i) => i.itemId === "chest_or_breathing"),
+    "a closed record must not gain items after it closes",
+  );
+  assert.deepEqual(closed?.audit.verifyChain(), { valid: true });
+});
+
+test("the resume payload names what was answered, not just how many", async () => {
+  // Counts alone force the agent to guess which screen items were asked, and
+  // guessing protocol order skips a red-flag item that was never asked.
+  const first = await callWith(SPOKEN);
+  await executeTool(first, "verify_subject", VERIFY);
+  await executeTool(first, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: false,
+    verbatim: null,
+  });
+  await executeTool(first, "record_adverse_event", AE);
+  await markAsDropped(first);
+
+  const second = await callWith(SPOKEN);
+  const outcome = await executeTool(second, "verify_subject", VERIFY);
+  const payload = JSON.stringify(outcome.result);
+  assert.match(payload, /fever/, "answered screen items must be named");
+  assert.match(payload, /Fatigue/, "captured events must be named");
+});
+
+test("the fabrication counter survives a redial", async () => {
+  // Two unfounded quotes before the drop and two after would otherwise never
+  // reach the threshold a single continuous call would have crossed.
+  const first = await callWith(SPOKEN);
+  await executeTool(first, "verify_subject", VERIFY);
+  first.provenanceRejections = 2;
+  first.refusedQuotes = ["verbatim_term:a", "verbatim_term:b"];
+  await markAsDropped(first);
+
+  const second = await callWith(SPOKEN);
+  await executeTool(second, "verify_subject", VERIFY);
+  assert.equal(second.provenanceRejections, 2);
+  assert.equal(second.refusedQuotes.length, 2);
+});
+
+test("a duplicate emergency escalation still ends the call", async () => {
+  // Returning a bare "continue" for a duplicate emergency told the agent to
+  // carry on with a call the protocol says must end.
+  const session = await callWith(SPOKEN);
+  await executeTool(session, "verify_subject", VERIFY);
+  const args = {
+    urgency: "emergency",
+    reason: "Subject reports chest pain and breathlessness.",
+    related_event_ids: [],
+  };
+  await executeTool(session, "escalate_to_coordinator", args);
+  const second = await executeTool(session, "escalate_to_coordinator", args);
+
+  assert.match(JSON.stringify(second.result), /ended_early|emergency care/);
+  assert.ok(
+    session.audit.all().some((e) => e.action === "ESCALATION_SUPPRESSED_DUPLICATE"),
+    "a requested page that was not raised must be visible",
+  );
+});
+
+test("two events sharing a reason phrase are two escalations", async () => {
+  const session = await callWith(SPOKEN);
+  await executeTool(session, "verify_subject", VERIFY);
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "Grade 3 event requires review.",
+    related_event_ids: ["AE-001"],
+  });
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "Grade 3 event requires review.",
+    related_event_ids: ["AE-002"],
+  });
+  assert.equal(
+    session.escalations.filter((e) => e.triggeredBy === "agent").length,
+    2,
+    "the second event's link would otherwise never be recorded",
+  );
 });
