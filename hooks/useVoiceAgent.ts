@@ -261,8 +261,19 @@ export function useVoiceAgent() {
       pendingRef.current = [];
       if (queued) {
         void sendTurn(queued, "subject");
-      } else if (stateRef.current !== "speaking") {
+        return;
+      }
+
+      // Ask the synthesizer whether it is actually still speaking rather than
+      // trusting the state flag. `state` is set to "speaking" on the first
+      // speak event and only cleared by onIdle — and onIdle returns early while
+      // a turn is in flight. If the last sentence finishes playing before the
+      // HTTP stream closes, that onIdle is swallowed, and the old guard
+      // (`state !== "speaking"`) left the UI stuck on Speaking with the
+      // microphone shut in half-duplex mode.
+      if (synthRef.current?.isIdle() ?? true) {
         setCallState("listening");
+        if (!bargeInRef.current) recognizerRef.current?.start();
       }
     },
     [appendAgentText, setCallState],

@@ -197,7 +197,17 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
   private speaking = false;
   private current = "";
   private voice: SpeechSynthesisVoice | null = null;
-  private cancelled = false;
+  /**
+   * Incremented on every cancel. Each utterance captures the value current when
+   * it was spoken, so a stale onend/onerror — delivered asynchronously after
+   * speechSynthesis.cancel() — can tell that it belongs to a superseded run.
+   *
+   * A single boolean was not enough: cancel() sets it synchronously, but a
+   * same-tick enqueue() resets it before the stale event arrives, and the stale
+   * handler then starts a second drain chain. Two chains shifting the same queue
+   * produce overlapping speech.
+   */
+  private generation = 0;
   private disposed = false;
   /** Rolling record of what was recently said aloud, for echo suppression. */
   private spokenHistory: { text: string; at: number }[] = [];
@@ -231,7 +241,6 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
     if (!this.supported) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    this.cancelled = false;
     this.queue.push(trimmed);
     this.spokenHistory.push({ text: trimmed, at: Date.now() });
 
@@ -258,6 +267,11 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
     return this.spokenHistory.map((e) => e.text).join(" ");
   }
 
+  /** True when nothing is playing and nothing is queued. */
+  isIdle() {
+    return !this.speaking && this.queue.length === 0;
+  }
+
   private drain() {
     const next = this.queue.shift();
     if (next === undefined) {
@@ -270,6 +284,7 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
 
     this.current = next;
 
+    const generation = this.generation;
     const utterance = new SpeechSynthesisUtterance(next);
     if (this.voice) utterance.voice = this.voice;
     // Slightly under default. Trial participants may be elderly or fatigued,
@@ -278,11 +293,16 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
     utterance.pitch = 1.0;
 
     utterance.onend = () => {
-      if (this.cancelled || this.disposed) return;
+      if (generation !== this.generation || this.disposed) return;
       this.drain();
     };
     utterance.onerror = (event) => {
-      if (this.cancelled || event.error === "interrupted" || event.error === "canceled") {
+      if (
+        generation !== this.generation ||
+        this.disposed ||
+        event.error === "interrupted" ||
+        event.error === "canceled"
+      ) {
         return;
       }
       this.callbacks.onError(event.error);
@@ -295,7 +315,7 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
   cancel() {
     if (!this.supported) return;
     const wasActive = this.speaking || this.queue.length > 0;
-    this.cancelled = true;
+    this.generation += 1;
     this.queue = [];
     this.current = "";
     this.speaking = false;

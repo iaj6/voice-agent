@@ -44,6 +44,12 @@ export interface SpeechSynthesizer {
    * after playback ends, so echo detection for them has to look backwards.
    */
   recentText(windowMs?: number): string;
+  /**
+   * True when nothing is playing and nothing is queued. The call state machine
+   * needs to ask rather than infer: onIdle can be swallowed while a turn is
+   * still in flight, leaving the UI stuck on "speaking" with the mic shut.
+   */
+  isIdle(): boolean;
   cancel(): void;
   dispose(): void;
 }

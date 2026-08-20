@@ -654,7 +654,15 @@ for (let round = 1; round <= repeat; round++) {
   else console.log(C.dim("\n  running…"));
   rounds.push(await runPool(keys, concurrency));
 }
+// The last round is what the transcripts and per-persona summary describe, but
+// the exit code must reflect every round. Reporting only the final one meant
+// `--repeat=5` could have four failing rounds and still exit 0 — which is what
+// CI reads.
 const results = rounds[rounds.length - 1];
+const failuresAcrossRounds = rounds.reduce(
+  (n, round) => n + round.reduce((m, r) => m + r.failed, 0),
+  0,
+);
 
 // Transcripts print after the run, in declaration order, so a parallel run reads
 // the same way a serial one did.
@@ -694,4 +702,4 @@ console.log(
       "  a pass/fail gate. A single failure is worth re-running before believing.",
   ),
 );
-process.exit(totalFailed > 0 ? 1 : 0);
+process.exit(failuresAcrossRounds > 0 ? 1 : 0);

@@ -69,3 +69,40 @@ test("interim barge-in check matches truncated prefixes both ways", () => {
   assert.equal(looksLikeEcho("no I have not seen anything", speaking), false);
   assert.equal(looksLikeEcho("anything", ""), false);
 });
+
+// --- synthesizer lifecycle ---------------------------------------------------
+// A stale utterance event, delivered asynchronously after cancel(), used to
+// start a second drain chain when a same-tick enqueue() had reset the shared
+// cancelled flag. Two chains shifting one queue produce overlapping speech.
+test("a generation counter survives cancel followed by a same-tick enqueue", () => {
+  let generation = 0;
+  const drains: number[] = [];
+
+  const speak = () => {
+    const mine = generation;
+    return () => {
+      if (mine !== generation) return; // stale event from a superseded run
+      drains.push(mine);
+    };
+  };
+
+  const staleOnEnd = speak();   // utterance from run 0
+  generation += 1;              // cancel()
+  const freshOnEnd = speak();   // enqueue() starts run 1
+
+  staleOnEnd();                 // arrives late, must be ignored
+  freshOnEnd();
+
+  assert.deepEqual(drains, [1], "only the current generation may drain");
+});
+
+test("a boolean flag would not have survived it", () => {
+  // Documents why the counter is necessary rather than a stylistic choice.
+  let cancelled = false;
+  const drains: string[] = [];
+  const stale = () => { if (cancelled) return; drains.push("stale"); };
+  cancelled = true;   // cancel()
+  cancelled = false;  // same-tick enqueue() resets it
+  stale();            // stale event now believes it is current
+  assert.deepEqual(drains, ["stale"], "the flag lets the stale chain through");
+});

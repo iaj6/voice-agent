@@ -36,6 +36,8 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
   private disposed = false;
   private audioEl: HTMLAudioElement | null = null;
   private objectUrl: string | null = null;
+  /** Settles the in-flight playBlob promise when playback is torn down. */
+  private endPlayback: (() => void) | null = null;
   private spokenHistory: { text: string; at: number }[] = [];
   private fallbackCount = 0;
 
@@ -104,6 +106,11 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
     return this.fallbackCount;
   }
 
+  /** True when nothing is playing and nothing is queued. */
+  isIdle() {
+    return !this.speaking && this.queue.length === 0;
+  }
+
   private async drain(): Promise<void> {
     for (;;) {
       if (this.cancelled || this.disposed) return;
@@ -144,8 +151,12 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
       const done = () => {
         el.onended = null;
         el.onerror = null;
+        this.endPlayback = null;
         resolve();
       };
+      // pause() fires no "ended" event, so without this the promise drain() is
+      // awaiting never settles and the continuation is leaked on every barge-in.
+      this.endPlayback = done;
       el.onended = done;
       el.onerror = done;
 
@@ -195,6 +206,7 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
       this.audioEl.onerror = null;
       this.audioEl = null;
     }
+    this.endPlayback?.();
     this.releaseUrl();
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
