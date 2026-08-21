@@ -371,7 +371,11 @@ class MemorySessionStore implements SessionStore {
     ];
     this.sessions.set(session.id, {
       ...stored,
-      audit: AuditTrail.rehydrate(session.id, merged),
+      // Re-armed, like detach() and the Postgres store. Every other write path
+      // here goes through that, and the comment on it records what happens when
+      // one does not: entries written afterwards are plaintext while the ones
+      // before are sealed.
+      audit: rehydrateSealed(session.id, await getKeyStore().get(session.id), merged),
     });
   }
 

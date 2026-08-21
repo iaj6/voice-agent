@@ -26,7 +26,14 @@ import { deliverEscalation } from "./deliver.ts";
 import { ACK_SLA_MS } from "./sla.ts";
 import { escalationRecipient } from "./transport.ts";
 
-/** How many out-of-band retries a failed send gets before the ladder moves on. */
+/**
+ * How many out-of-band retries a failed send gets before the ladder moves on.
+ *
+ * Retries, not attempts. The original in-call send is not one of them — counting
+ * it made the documented figure and the actual behaviour differ by one, which is
+ * the kind of thing nobody notices until they are counting pages during an
+ * incident.
+ */
 export const MAX_RETRIES = 3;
 
 /** Wait between retries. Short: these are pages, not newsletters. */
@@ -36,6 +43,14 @@ export interface SweepResult {
   retried: number;
   escalatedToSecondary: number;
   alarmed: number;
+  /**
+   * Retries that were attempted and failed again.
+   *
+   * Counted separately, because a sweep that is actively churning failed sends
+   * used to report all zeros — "nothing needed doing" — on a system whose whole
+   * premise is that failures are never silent.
+   */
+  retriesFailed: number;
   stillWaiting: number;
   /**
    * Delivery rows whose escalation could not be found on its session.
@@ -96,6 +111,7 @@ export async function sweepEscalations(now = new Date()): Promise<SweepResult> {
     retried: 0,
     escalatedToSecondary: 0,
     alarmed: 0,
+    retriesFailed: 0,
     stillWaiting: 0,
     orphaned: 0,
   };
@@ -114,7 +130,7 @@ export async function sweepEscalations(now = new Date()): Promise<SweepResult> {
 
     // 1. Nothing has ever reached anyone on this rung. Retry it.
     if (!primary.some(delivered)) {
-      if (primary.length >= MAX_RETRIES) {
+      if (primary.length > MAX_RETRIES) {
         if (alarms.length === 0) {
           await raiseAlarm(session, escalation, "delivery failed repeatedly", now);
           result.alarmed += 1;
@@ -135,6 +151,7 @@ export async function sweepEscalations(now = new Date()): Promise<SweepResult> {
       const retry = await deliverEscalation(session, escalation, { now });
       await getSessionStore().appendAudit(session);
       if (retry.delivered) result.retried += 1;
+      else result.retriesFailed += 1;
       continue;
     }
 

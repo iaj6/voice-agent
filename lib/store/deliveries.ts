@@ -73,7 +73,15 @@ export interface DeliveryStore {
   /** Sent, unacknowledged, past deadline. The alarm list. */
   overdue(now?: Date): Promise<DeliveryRecord[]>;
   attemptsFor(sessionId: string, escalationId: string): Promise<number>;
-  /** Everything still in flight: unacknowledged, whatever rung it is on. */
+  /**
+   * Everything still in flight: unacknowledged, and not yet alarmed.
+   *
+   * An alarm is the terminal rung. Once one is raised the ladder has nothing
+   * further to try, and leaving those escalations in the working set meant every
+   * sweep re-loaded every unacknowledged escalation the study had ever produced,
+   * forever — a session read per escalation per minute, growing monotonically.
+   * They stay unacknowledged and visible on the record; they stop being work.
+   */
   openLadder(): Promise<DeliveryRecord[]>;
 }
 
@@ -184,13 +192,13 @@ class MemoryDeliveryStore implements DeliveryStore {
   }
 
   async openLadder(): Promise<DeliveryRecord[]> {
-    const acknowledged = new Set(
+    const retired = new Set(
       [...this.rows.values()]
-        .filter((r) => r.acknowledgedAt !== null)
+        .filter((r) => r.acknowledgedAt !== null || r.tier === "alarm")
         .map((r) => `${r.sessionId}:${r.escalationId}`),
     );
     return [...this.rows.values()]
-      .filter((r) => !acknowledged.has(`${r.sessionId}:${r.escalationId}`))
+      .filter((r) => !retired.has(`${r.sessionId}:${r.escalationId}`))
       .map((r) => ({ ...r }));
   }
 }
@@ -200,17 +208,31 @@ class PostgresDeliveryStore implements DeliveryStore {
 
   async queue(input: NewDelivery, ackToken: string): Promise<DeliveryRecord> {
     const sql = getDb();
-    const id = randomUUID();
-    const rows = (await sql`
-      insert into escalation_delivery
-        (id, session_id, escalation_id, subject_id, urgency, channel, destination,
-         attempt, tier, status, ack_token_hash, deadline_at)
-      values (${id}, ${input.sessionId}, ${input.escalationId}, ${input.subjectId},
-              ${input.urgency}, ${input.channel}, ${input.destination},
-              ${input.attempt}, ${input.tier}, 'queued', ${hashToken(ackToken)},
-              ${input.deadlineAt.toISOString()})
-      returning *`) as Record<string, unknown>[];
-    return rowToRecord(rows[0]);
+
+    // `attempt` is derived by reading the current count, and two writers can
+    // read the same one — a sweep retry racing a live call's escalate, for the
+    // same escalation. The unique (session_id, escalation_id, attempt)
+    // constraint then rejects the loser, which threw out of the delivery path
+    // and left an audit entry with no delivery row: exactly the state the
+    // recording exists to prevent. Take the next free slot instead of insisting
+    // on the one we guessed.
+    for (let attempt = input.attempt; attempt < input.attempt + 8; attempt++) {
+      const rows = (await sql`
+        insert into escalation_delivery
+          (id, session_id, escalation_id, subject_id, urgency, channel, destination,
+           attempt, tier, status, ack_token_hash, deadline_at)
+        values (${randomUUID()}, ${input.sessionId}, ${input.escalationId},
+                ${input.subjectId}, ${input.urgency}, ${input.channel},
+                ${input.destination}, ${attempt}, ${input.tier}, 'queued',
+                ${hashToken(ackToken)}, ${input.deadlineAt.toISOString()})
+        on conflict (session_id, escalation_id, attempt) do nothing
+        returning *`) as Record<string, unknown>[];
+      if (rows.length > 0) return rowToRecord(rows[0]);
+    }
+    throw new Error(
+      `Could not allocate a delivery attempt for ${input.escalationId} on session ` +
+        `${input.sessionId} after 8 tries.`,
+    );
   }
 
   async markSent(id: string, providerId: string): Promise<void> {
@@ -286,7 +308,7 @@ class PostgresDeliveryStore implements DeliveryStore {
          select 1 from escalation_delivery a
           where a.session_id = d.session_id
             and a.escalation_id = d.escalation_id
-            and a.acknowledged_at is not null)
+            and (a.acknowledged_at is not null or a.tier = 'alarm'))
        order by d.created_at`) as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }

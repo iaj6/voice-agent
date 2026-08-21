@@ -21,6 +21,7 @@ import {
   type CheckInSession,
 } from "../store/session.ts";
 import { deliverEscalation } from "../escalation/deliver.ts";
+import { getDeliveryStore } from "../store/deliveries.ts";
 import { getSessionStore } from "../store/session-store.ts";
 
 /**
@@ -360,12 +361,18 @@ export async function* runTurn(
     // and pages the coordinator a second time for one event. Keyed on the
     // categories that fired, because the reason string is derived from them and
     // a repeat of the same rules is the same alarm.
+    // Sorted once, and stored on the record, so the key is compared against a
+    // field rather than against a suffix of a sentence built somewhere else. The
+    // first version sorted the key and left the reason in hit order — and
+    // scanForSafetySignals orders by urgency rank, not alphabetically — so any
+    // utterance matching two rules ("I can't breathe and I passed out") never
+    // matched its own duplicate, and paged twice for one event.
     const categories = hits
       .map((h) => h.category)
       .sort()
       .join("; ");
     const alreadyRaised = session.escalations.find(
-      (e) => e.triggeredBy === "safety_net" && e.reason.endsWith(categories),
+      (e) => e.triggeredBy === "safety_net" && e.category === categories,
     );
     if (alreadyRaised) {
       session.audit.record({
@@ -381,9 +388,21 @@ export async function* runTurn(
       await saveSession(session);
       yield { type: "safety", hits };
       yield { type: "state", snapshot: snapshot(session) };
+
+      // Whether the first page actually went, not an assumption that it did.
+      // Passing a literal true here told the agent "the coordinator HAS been
+      // paged, you may tell the subject so" on the second trigger even when the
+      // first send had failed — reinstating, on the repeat path, the exact false
+      // claim this whole subsystem exists to remove.
+      const earlier = await getDeliveryStore().forSession(session.id);
+      const everDelivered = earlier.some(
+        (d) =>
+          d.escalationId === alreadyRaised.id &&
+          (d.status === "sent" || d.status === "acknowledged"),
+      );
       session.messages.push({
         role: "system",
-        content: safetyNetSystemMessage(hits, true, alreadyRaised.id),
+        content: safetyNetSystemMessage(hits, everDelivered, alreadyRaised.id),
       });
     } else {
     const record = {
@@ -394,7 +413,7 @@ export async function* runTurn(
         hits.map((h) => h.category).join("; "),
       relatedEventIds: [],
       triggeredBy: "safety_net" as const,
-      category: hits[0].category,
+      category: categories,
       createdAt: new Date().toISOString(),
       sponsorNotificationDeadline:
         urgency === "routine"
@@ -430,7 +449,7 @@ export async function* runTurn(
     // And deliver it. The deterministic net is the escalation that must not
     // depend on model judgment, so it must not depend on the model choosing to
     // call a tool either — it raises its own page, on its own.
-    const delivery = await deliverEscalation(session, record);
+    const delivery = await deliverEscalation(session, record, { onCall: true });
     // Deliberately not yielded as an `error`. The transport treats an error event
     // as "the turn broke" and speaks a fallback line — which promised the subject
     // a coordinator would call, the exact false claim this whole change exists to

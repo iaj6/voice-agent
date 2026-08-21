@@ -36,8 +36,13 @@ has found another instance:
 - Resume, added so a dropped call is not lost, closed calls that had not dropped: it read
   an open record as an abandoned one, so a subject redialling while still connected on
   the first line had the live call locked under them mid-sentence.
+- Escalation delivery was built so the agent could never claim a page that had not
+  happened. Deduplicating repeat safety-net triggers then hardcoded `delivered: true` on
+  the repeat path, so a second "I still can't breathe" told the agent the coordinator had
+  been paged when the first send had failed — the same false claim, reinstated by the fix
+  for a different problem, three commits later.
 
-Three of those five were introduced *by a fix to a different control*. The pattern is not
+Four of those six were introduced *by a fix to a different control*. The pattern is not
 carelessness — it is that a control's failure mode is usually invisible from the diff that
 breaks it.
 

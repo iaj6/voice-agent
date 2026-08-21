@@ -13,8 +13,16 @@ export interface EscalationMessage {
   subject: string;
   text: string;
   html: string;
-  /** Bounds how long a live call may wait on this. See EMERGENCY_TIMEOUT_MS. */
-  urgency?: "emergency" | "urgent" | "routine";
+  /**
+   * Whether someone is on the line waiting for this to finish.
+   *
+   * Urgency was the wrong axis. Only `emergency` got the short budget, so a
+   * subject saying "my hands are shaking" — an *urgent* net rule — triggered a
+   * synchronous send with a fifteen-second ceiling and heard silence for all of
+   * it. What decides the budget is whether a call is waiting, not how bad the
+   * news is.
+   */
+  onCall?: boolean;
 }
 
 export interface SendResult {
@@ -45,8 +53,8 @@ export class DeliveryFailure extends Error {
  * that failed and was recorded as failed — and the fallback on that path tells
  * them to call 911 directly, which is the right thing to say quickly.
  */
-const EMERGENCY_TIMEOUT_MS = 4_000;
-const STANDARD_TIMEOUT_MS = 15_000;
+const ON_CALL_TIMEOUT_MS = 4_000;
+const BACKGROUND_TIMEOUT_MS = 15_000;
 
 class ResendTransport implements EscalationTransport {
   readonly channel = "email:resend";
@@ -75,7 +83,7 @@ class ResendTransport implements EscalationTransport {
           html: message.html,
         }),
         signal: AbortSignal.timeout(
-          message.urgency === "emergency" ? EMERGENCY_TIMEOUT_MS : STANDARD_TIMEOUT_MS,
+          message.onCall ? ON_CALL_TIMEOUT_MS : BACKGROUND_TIMEOUT_MS,
         ),
       });
     } catch (err) {

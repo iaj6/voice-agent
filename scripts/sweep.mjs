@@ -43,6 +43,7 @@ const r = await sweepEscalations(at);
 const line = (label, n, colour) =>
   console.log(`  ${n > 0 ? colour(String(n).padStart(3)) : C.dim("  0")}  ${label}`);
 line("retried after a failed send", r.retried, C.good);
+line("retries that failed again", r.retriesFailed, C.bad);
 line("escalated to the backup contact", r.escalatedToSecondary, C.bad);
 line("alarmed — nobody acknowledged", r.alarmed, C.bad);
 line("still inside their response window", r.stillWaiting, C.dim);

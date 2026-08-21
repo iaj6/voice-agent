@@ -182,3 +182,87 @@ test("a provider that never recovers alarms instead of retrying forever", async 
   );
 });
 
+
+test("a repeat trigger never claims a page that failed", async () => {
+  // The dedupe path passed a literal `true` for "delivered", so on the second
+  // trigger the agent was told the coordinator HAS been paged and may say so —
+  // reinstating, on the repeat path, the exact false claim this subsystem was
+  // built to remove.
+  const { runTurn } = await import("../lib/agent/runner.ts");
+  transport.failing = true;
+  const session = await getSessionStore().create();
+
+  for (const utterance of ["I can't breathe", "I still can't breathe"]) {
+    for await (const event of runTurn(session, { source: "subject", utterance })) {
+      void event;
+    }
+  }
+
+  const operator = session.messages.filter(
+    (m) => m.role === "system" && typeof m.content === "string",
+  );
+  assert.ok(operator.length >= 2, "the repeat trigger produced no operator message");
+  for (const message of operator) {
+    assert.match(
+      String(message.content),
+      /did NOT go through/,
+      "the agent was told a failed page had reached the coordinator",
+    );
+  }
+});
+
+test("two rules firing at once still dedupe on a repeat", async () => {
+  // The key was sorted and the stored reason was not — and hits are ordered by
+  // urgency rank, not alphabetically — so any two-rule utterance never matched
+  // its own duplicate and paged twice for one event.
+  const { runTurn } = await import("../lib/agent/runner.ts");
+  const session = await getSessionStore().create();
+  const utterance = "I can't breathe and I passed out";
+
+  for (let i = 0; i < 2; i++) {
+    for await (const event of runTurn(session, { source: "subject", utterance })) {
+      void event;
+    }
+  }
+
+  const raised = session.escalations.filter((e) => e.triggeredBy === "safety_net");
+  assert.equal(raised.length, 1, "a two-rule emergency raised two escalations");
+  assert.equal(transport.sent.length, 1, "a two-rule emergency paged twice");
+});
+
+test("an alarm whose own send fails does not re-alarm forever", async () => {
+  // fail() hardcoded tier "primary", so an alarm that could not be delivered was
+  // filed as a primary attempt — the sweep never saw an alarm row, alarmed again
+  // on every pass, and wrote a fresh ESCALATION_ALARM onto a participant's audit
+  // trail every minute indefinitely.
+  transport.failing = true;
+  const { id } = await escalatedCall();
+
+  let alarms = 0;
+  for (let i = 0; i < MAX_RETRIES + 6; i++) {
+    alarms += (await sweepEscalations(later(RETRY_WINDOW * (i + 1)))).alarmed;
+  }
+  assert.equal(alarms, 1, "the sweep alarmed repeatedly for one escalation");
+
+  const session = (await getSessionStore().get(id))!;
+  const entries = session.audit.all().filter((e) => e.action === "ESCALATION_ALARM");
+  assert.equal(entries.length, 1, "the audit trail collected duplicate alarms");
+});
+
+test("a churning sweep reports the churn instead of all zeros", async () => {
+  transport.failing = true;
+  await escalatedCall();
+  const pass = await sweepEscalations(later(RETRY_WINDOW));
+
+  assert.equal(pass.retried, 0);
+  assert.equal(pass.retriesFailed, 1, "a failed retry reported as nothing happening");
+});
+
+test("an alarmed escalation leaves the sweeper's working set", async () => {
+  delete process.env.ESCALATION_EMAIL_SECONDARY;
+  await escalatedCall();
+  await sweepEscalations(pastDeadline());
+
+  const open = await getDeliveryStore().openLadder();
+  assert.deepEqual(open, [], "an alarmed escalation is swept forever");
+});

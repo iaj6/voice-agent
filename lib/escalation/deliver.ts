@@ -72,10 +72,19 @@ function safeSummary(session: CheckInSession, escalation: EscalationRecord): str
 }
 
 function ackBaseUrl(): string | null {
-  const configured =
-    process.env.VOICE_AGENT_PUBLIC_URL?.trim() || process.env.VOICE_AGENT_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-  return process.env.NODE_ENV === "production" ? null : "http://localhost:3100";
+  const production = process.env.NODE_ENV === "production";
+  // VOICE_AGENT_URL is the eval harness's variable and defaults to localhost, so
+  // accepting it in production reopened the hole this guard closes: a deployment
+  // that set it for the harness would mail coordinators an acknowledge button
+  // pointing at localhost, reported delivered and never acknowledged.
+  const configured = production
+    ? process.env.VOICE_AGENT_PUBLIC_URL?.trim()
+    : process.env.VOICE_AGENT_PUBLIC_URL?.trim() || process.env.VOICE_AGENT_URL?.trim();
+  if (!configured) return production ? null : "http://localhost:3100";
+
+  const url = configured.replace(/\/+$/, "");
+  if (production && /^https?:\/\/(localhost|127\.|\[::1\])/i.test(url)) return null;
+  return url;
 }
 
 export interface DeliveryOptions {
@@ -83,6 +92,8 @@ export interface DeliveryOptions {
   tier?: DeliveryTier;
   /** Overrides the recipient, for a secondary contact or an alarm. */
   to?: string | null;
+  /** True when a participant is waiting on the line for this to finish. */
+  onCall?: boolean;
   /**
    * The clock this delivery is stamped against.
    *
@@ -118,6 +129,8 @@ export async function deliverEscalation(
       "unknown",
       "(unknown)",
       `delivery could not be attempted: ${String(err)}`,
+      null,
+      options,
     );
   }
 }
@@ -144,6 +157,8 @@ async function attemptDelivery(
       transport.channel,
       "(none)",
       "ESCALATION_EMAIL_TO is not set, so there is nowhere to send this",
+      null,
+      options,
     );
   }
   if (!link) {
@@ -157,6 +172,8 @@ async function attemptDelivery(
       transport.channel,
       to,
       "no public base URL is configured, so the acknowledgement link would be unreachable",
+      null,
+      options,
     );
   }
 
@@ -192,13 +209,13 @@ async function attemptDelivery(
 
   let providerId: string;
   try {
-    ({ providerId } = await transport.send({ ...message, to, urgency: escalation.urgency }));
+    ({ providerId } = await transport.send({ ...message, to, onCall: options.onCall ?? false }));
   } catch (err) {
     const detail =
       err instanceof DeliveryFailure ? err.detail : `unexpected error: ${String(err)}`;
     // Bookkeeping must not turn a failure into a thrown error.
     await store.markFailed(delivery.id, detail).catch(() => {});
-    return fail(session, escalation, attempt, transport.channel, to, detail, delivery);
+    return fail(session, escalation, attempt, transport.channel, to, detail, delivery, options);
   }
 
   // Sent. From here the message is in the coordinator's inbox and nothing that
@@ -260,6 +277,7 @@ async function fail(
   destination: string,
   detail: string,
   delivery: DeliveryRecord | null = null,
+  options: DeliveryOptions = {},
 ): Promise<DeliveryOutcome> {
   // A row even when nothing could be attempted. The config failures used to
   // leave only a sealed audit entry, so attemptsFor() stayed at 0, `attempt`
@@ -277,8 +295,17 @@ async function fail(
           channel,
           destination,
           attempt: Math.max(attempt, 1),
-          tier: "primary",
-          deadlineAt: ackDeadline(escalation.urgency),
+          // The tier this call was actually for. Hardcoding "primary" meant an
+          // alarm whose own send failed was recorded as a primary attempt, so
+          // the sweep never saw an alarm row, re-alarmed on every pass, and
+          // wrote a fresh ESCALATION_ALARM entry onto a participant's audit
+          // trail every minute forever — while also inflating the retry counter
+          // that decides when to stop.
+          tier: options.tier ?? "primary",
+          deadlineAt: ackDeadline(
+            escalation.urgency,
+            (options.now ?? new Date()).getTime(),
+          ),
         },
         newAckToken(),
       )

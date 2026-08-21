@@ -53,8 +53,8 @@ export async function GET(request: Request) {
 
   return page(
     `${record.urgency.toUpperCase()} escalation`,
-    `Escalation ${esc(record.escalationId)} for subject ${esc(record.subjectId ?? "unidentified")}, ` +
-      `raised ${esc(when(record.deadlineAt))} response deadline. ` +
+    `Escalation ${esc(record.escalationId)} for subject ${esc(record.subjectId ?? "unidentified")}. ` +
+      `Response deadline ${esc(when(record.deadlineAt))}. ` +
       "Confirm below that you have seen it. Nothing is recorded until you do.",
     true,
     token,

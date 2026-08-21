@@ -1328,7 +1328,7 @@ const handlers: Record<string, Handler> = {
             "delivered, so the duplicate request was treated as a retry rather " +
             "than suppressed.",
         });
-        const retry = await deliverEscalation(session, duplicate);
+        const retry = await deliverEscalation(session, duplicate, { onCall: true });
         return {
           result: {
             escalation_id: duplicate.id,
@@ -1425,7 +1425,7 @@ const handlers: Record<string, Handler> = {
     // The system used to report `notified: coordinator` and have the agent tell
     // the participant their coordinator had been alerted, while nothing had been
     // sent anywhere — the one place it said something untrue to a sick person.
-    const outcome = await deliverEscalation(session, record);
+    const outcome = await deliverEscalation(session, record, { onCall: true });
 
     return {
       result: {
