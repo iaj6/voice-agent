@@ -398,3 +398,15 @@ export function highestUrgency(hits: SafetyNetHit[]): EscalationUrgency | null {
   if (asserted.length === 0) return null;
   return asserted[0].urgency;
 }
+
+/**
+ * Every rule's instruction text, for tests that check the whole table.
+ *
+ * Exported because reaching the rules only through scanForSafetySignals meant a
+ * test named "no rule instruction hardcodes a country's number" inspected the two
+ * rules one utterance happened to match — so a new rule with a literal "call 911"
+ * would have passed it.
+ */
+export function ruleInstructions(): readonly string[] {
+  return NET_RULES.map((r) => r.instruction);
+}

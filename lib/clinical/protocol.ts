@@ -296,3 +296,8 @@ export function findSubject(
   if (match.dateOfBirth !== dateOfBirth.trim()) return null;
   return match;
 }
+
+/** The country of a site, by its numeric prefix. Used for pre-verification hints. */
+export function siteCountryForPrefix(prefix: string): string | null {
+  return SUBJECTS.find((s) => s.siteId === prefix)?.siteCountry ?? null;
+}

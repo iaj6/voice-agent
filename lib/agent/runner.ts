@@ -13,8 +13,8 @@ import {
   scanForSafetySignals,
   type SafetyNetHit,
 } from "../clinical/safety.ts";
-import { PROTOCOL } from "../clinical/protocol.ts";
-import { localise, regionFor, type Region } from "../clinical/locale.ts";
+import { PROTOCOL, siteCountryForPrefix } from "../clinical/protocol.ts";
+import { localise, speakingRegion, type Region } from "../clinical/locale.ts";
 import {
   nextEscalationId,
   saveSession,
@@ -412,7 +412,11 @@ export async function* runTurn(
           hits,
           everDelivered,
           alreadyRaised.id,
-          regionFor(session.subject?.siteCountry),
+          speakingRegion(
+          session.subject?.siteCountry,
+          session.subjectUtterances,
+          siteCountryForPrefix,
+        ),
         ),
       });
     } else {
@@ -475,7 +479,11 @@ export async function* runTurn(
         hits,
         delivery.delivered,
         record.id,
-        regionFor(session.subject?.siteCountry),
+        speakingRegion(
+          session.subject?.siteCountry,
+          session.subjectUtterances,
+          siteCountryForPrefix,
+        ),
       ),
     });
     }

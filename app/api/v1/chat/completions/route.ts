@@ -1,4 +1,6 @@
-import { emergencyPhrase, regionFor } from "@/lib/clinical/locale";
+import { emergencyPhrase, speakingRegion } from "@/lib/clinical/locale";
+import { siteCountryForPrefix } from "@/lib/clinical/protocol";
+
 import { runTurn } from "@/lib/agent/runner";
 import {
   createSession,
@@ -20,8 +22,16 @@ import path from "node:path";
  * to "your local emergency number" when verification has not happened yet, which
  * is common here: a turn that broke early may not have got that far.
  */
-function brokenTurnLine(session: { subject?: { siteCountry?: string } | null }): string {
-  const region = regionFor(session.subject?.siteCountry);
+function brokenTurnLine(session: CheckInSession): string {
+  // Typed as the real session, not a structural shape with every field optional.
+  // The loose version compiled happily if Subject.siteCountry were renamed or
+  // removed, silently degrading to "your local emergency number" — defeating the
+  // typechecker on precisely the field this change introduced.
+  const region = speakingRegion(
+    session.subject?.siteCountry,
+    session.subjectUtterances,
+    siteCountryForPrefix,
+  );
   return (
     "I'm sorry, something has gone wrong on my end and I can't continue. " +
     `Please call your study site directly, and call ${emergencyPhrase(region)} ` +

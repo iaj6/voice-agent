@@ -15,10 +15,11 @@ import {
   knownRegions,
   localise,
   regionFor,
+  speakingRegion,
   UNKNOWN_REGION,
 } from "../lib/clinical/locale.ts";
-import { SUBJECTS } from "../lib/clinical/protocol.ts";
-import { assertedHits, scanForSafetySignals } from "../lib/clinical/safety.ts";
+import { SUBJECTS, siteCountryForPrefix } from "../lib/clinical/protocol.ts";
+import { ruleInstructions } from "../lib/clinical/safety.ts";
 import { executeTool } from "../lib/agent/tools.ts";
 import { __setSessionStore, getSessionStore } from "../lib/store/session-store.ts";
 import { __setKeyStore } from "../lib/store/keys.ts";
@@ -76,16 +77,28 @@ test("an unknown country gets a hedge, never a guess", () => {
 });
 
 test("no rule instruction hardcodes a country's number", () => {
-  // The rules carry placeholders; substitution happens once, where the subject
-  // is known. A literal in a rule is a number six copies of it will drift from.
-  const hits = assertedHits(
-    scanForSafetySignals("I can't breathe. I don't want to live anymore."),
-  );
-  assert.ok(hits.length >= 2, "the corpus utterance stopped matching");
-  for (const hit of hits) {
+  // Every rule, not the two that one utterance happens to match. Reaching them
+  // through scanForSafetySignals meant a new rule with a literal "call 911"
+  // would have passed a test whose name says otherwise.
+  const instructions = ruleInstructions();
+  assert.ok(instructions.length >= 8, `only ${instructions.length} rules reached`);
+  for (const instruction of instructions) {
     assert.ok(
-      !/\b(911|988|999|000|111|116 123)\b/.test(hit.instruction),
-      `${hit.category} hardcodes a number: ${hit.instruction}`,
+      !/\b(911|988|999|000|111|116 123|13 11 14|1737)\b/.test(instruction),
+      `a rule hardcodes a number: ${instruction}`,
+    );
+  }
+});
+
+test("no rule instruction asserts that anyone has been notified", () => {
+  // The same claim has had to be removed from four separate places. A rule is
+  // the wrong layer to make it from: it is a statement about a mail transport.
+  for (const instruction of ruleInstructions()) {
+    assert.ok(
+      !/alerting (their|your) study coordinator|coordinator has been (paged|alerted|notified)/i.test(
+        instruction,
+      ),
+      `a rule claims a notification: ${instruction}`,
     );
   }
 });
@@ -192,7 +205,60 @@ test("an eval session records the page and sends nothing", async () => {
   assert.equal((out.result as Record<string, unknown>).delivered, true);
   const { getDeliveryStore } = await import("../lib/store/deliveries.ts");
   const [row] = await getDeliveryStore().forSession(session.id);
-  assert.equal(row.status, "sent");
-  assert.match(row.providerId!, /suppressed/);
+  // Its own status, not "sent". Filing a suppressed send as a delivery said
+  // something untrue in the subsystem built to stop exactly that.
+  assert.equal(row.status, "suppressed");
   assert.equal(row.destination, "coordinator@example.test", "the record lost who it was for");
+  assert.ok(
+    session.audit.all().some((e) => e.action === "ESCALATION_DELIVERY_SUPPRESSED"),
+    "nothing on the record says this page was never sent",
+  );
+  assert.ok(
+    !session.audit.all().some((e) => e.action === "ESCALATION_DELIVERED"),
+    "a suppressed page was recorded as delivered",
+  );
+});
+
+test("a synthetic session never enters the escalation ladder", async () => {
+  // The sweeper used to treat suppressed rows as delivered, so it walked the
+  // whole ladder on pages nobody sent — writing UNACKNOWLEDGED and ALARM entries
+  // onto eval sessions.
+  process.env.ESCALATION_EMAIL_TO = "coordinator@example.test";
+  const session = await getSessionStore().create();
+  session.synthetic = true;
+  session.subjectUtterances = ["I have had chest pain"];
+  await executeTool(session, "verify_subject", {
+    subject_id: "001-0042",
+    date_of_birth: "1958-03-11",
+  });
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "emergency",
+    reason: "Possible cardiac emergency.",
+    related_event_ids: [],
+  });
+
+  const { getDeliveryStore } = await import("../lib/store/deliveries.ts");
+  assert.deepEqual(await getDeliveryStore().openLadder(), []);
+});
+
+test("the emergency number survives an emergency before verification", async () => {
+  // The net fires on the first utterance, and the ID is spoken before the date
+  // of birth — so resolving the region only from a verified subject meant the
+  // agent said "your local emergency number" at the most time-critical moment it
+  // has. The site prefix is enough to answer which country, and it decides only
+  // what is spoken aloud, never what may be written.
+  const us = speakingRegion(null, ["001-0042"], siteCountryForPrefix);
+  assert.equal(emergencyPhrase(us), "911");
+
+  const uk = speakingRegion(null, ["My subject ID is 002 0013"], siteCountryForPrefix);
+  assert.equal(emergencyPhrase(uk), "999");
+
+  // Still hedges when there is genuinely nothing to go on.
+  assert.equal(
+    emergencyPhrase(speakingRegion(null, ["I don't remember my number"], siteCountryForPrefix)),
+    "your local emergency number",
+  );
+
+  // A verified subject always wins over a spoken hint.
+  assert.equal(emergencyPhrase(speakingRegion("GB", ["001-0042"], siteCountryForPrefix)), "999");
 });

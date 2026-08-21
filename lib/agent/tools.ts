@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { PROTOCOL, findSubject } from "../clinical/protocol.ts";
-import { emergencyPhrase, regionFor } from "../clinical/locale.ts";
+import { PROTOCOL, findSubject, siteCountryForPrefix } from "../clinical/protocol.ts";
+import { emergencyPhrase, speakingRegion } from "../clinical/locale.ts";
 import {
   CTCAE_GRADES,
   ESCALATION_GRADE_THRESHOLD,
@@ -1257,7 +1257,11 @@ const handlers: Record<string, Handler> = {
     // Whatever this agent says out loud about emergency services has to be true
     // where the participant actually is. Site 002 is in the UK; telling someone
     // in Manchester to call 911 costs them the seconds that matter most.
-    const region = regionFor(session.subject?.siteCountry);
+    const region = speakingRegion(
+      session.subject?.siteCountry,
+      session.subjectUtterances,
+      siteCountryForPrefix,
+    );
     const urgency = String(input.urgency ?? "routine") as EscalationUrgency;
     const reasonText = String(input.reason ?? "");
 

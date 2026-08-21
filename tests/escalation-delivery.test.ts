@@ -310,6 +310,7 @@ test("a store failure is a recorded delivery failure, not a thrown error", async
     },
     markSent: async () => {},
     markFailed: async () => {},
+    markSuppressed: async () => {},
     find: async () => null,
     acknowledge: async () => null,
     forSession: async () => [],

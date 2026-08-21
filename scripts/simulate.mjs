@@ -3,7 +3,7 @@
  *
  * Two modes, because a suite you avoid running is a suite you do not have:
  *
- *   npm run eval:fast   three short personas, ~90s — run this on every change
+ *   npm run eval:fast   four short personas, ~90s — run this on every change
  *   npm run eval        all personas, ~6 min — run before committing
  *
  * Personas are independent conversations, so almost all of the old 25-minute

@@ -151,11 +151,18 @@ export async function createSession(
   options: { resumable?: boolean; synthetic?: boolean } = {},
 ): Promise<CheckInSession> {
   const session = await getSessionStore().create();
+
+  // Persisted whenever either flag is set, not only when resumable is.
+  // `synthetic` used to be written to the in-memory object and saved only inside
+  // the resumable branch, so a session created with synthetic alone reloaded as
+  // false on the very next turn — and a control that exists to stop a real
+  // coordinator being paged was failing open. It worked at all only because the
+  // eval harness happens to pass both fields.
+  const changed = options.synthetic === true || options.resumable === false;
   if (options.synthetic === true) session.synthetic = true;
-  if (options.resumable === false) {
-    session.resumable = false;
-    await getSessionStore().save(session);
-  }
+  if (options.resumable === false) session.resumable = false;
+  if (changed) await getSessionStore().save(session);
+
   return session;
 }
 

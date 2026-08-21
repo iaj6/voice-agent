@@ -10,7 +10,20 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { getDb, isDatabaseConfigured } from "./db.ts";
 import type { EscalationUrgency } from "../clinical/safety.ts";
 
-export type DeliveryStatus = "queued" | "sent" | "failed" | "acknowledged";
+export type DeliveryStatus =
+  | "queued"
+  | "sent"
+  | "failed"
+  | "acknowledged"
+  /**
+   * Recorded in full, sent to nobody, because the session was the eval
+   * harness's. Distinct from "sent" on purpose: this subsystem's whole premise
+   * is that the record matches the fact, and filing a suppressed send under the
+   * same status as a real one — with an audit reason reading "accepted by the
+   * delivery provider" — is exactly the gap it exists to close. It also kept the
+   * sweeper walking the ladder on pages nobody sent.
+   */
+  | "suppressed";
 
 /**
  * Which rung of the escalation ladder a delivery is.
@@ -65,6 +78,8 @@ export interface DeliveryStore {
   queue(input: NewDelivery, ackToken: string): Promise<DeliveryRecord>;
   markSent(id: string, providerId: string): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
+  /** Records that nothing was sent, because the session was synthetic. */
+  markSuppressed(id: string): Promise<void>;
   /** Looks a delivery up by token without changing it. Used by the GET view. */
   find(token: string): Promise<DeliveryRecord | null>;
   /** Acknowledges by token. Returns the record, or null if the token is unknown. */
@@ -143,6 +158,11 @@ class MemoryDeliveryStore implements DeliveryStore {
     }
   }
 
+  async markSuppressed(id: string): Promise<void> {
+    const row = this.rows.get(id);
+    if (row) row.status = "suppressed";
+  }
+
   async find(token: string): Promise<DeliveryRecord | null> {
     const hash = hashToken(token);
     for (const row of this.rows.values()) {
@@ -194,7 +214,10 @@ class MemoryDeliveryStore implements DeliveryStore {
   async openLadder(): Promise<DeliveryRecord[]> {
     const retired = new Set(
       [...this.rows.values()]
-        .filter((r) => r.acknowledgedAt !== null || r.tier === "alarm")
+        .filter(
+        (r) =>
+          r.acknowledgedAt !== null || r.tier === "alarm" || r.status === "suppressed",
+      )
         .map((r) => `${r.sessionId}:${r.escalationId}`),
     );
     return [...this.rows.values()]
@@ -259,6 +282,13 @@ class PostgresDeliveryStore implements DeliveryStore {
     return rows.length > 0 ? rowToRecord(rows[0]) : null;
   }
 
+  async markSuppressed(id: string): Promise<void> {
+    const sql = getDb();
+    await sql`
+      update escalation_delivery set status = 'suppressed', updated_at = now()
+       where id = ${id}`;
+  }
+
   async acknowledge(token: string, by: string): Promise<DeliveryRecord | null> {
     const sql = getDb();
     // Conditional on not already acknowledged, so a second click does not
@@ -308,7 +338,8 @@ class PostgresDeliveryStore implements DeliveryStore {
          select 1 from escalation_delivery a
           where a.session_id = d.session_id
             and a.escalation_id = d.escalation_id
-            and (a.acknowledged_at is not null or a.tier = 'alarm'))
+            and (a.acknowledged_at is not null or a.tier = 'alarm'
+                 or a.status = 'suppressed'))
        order by d.created_at`) as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }

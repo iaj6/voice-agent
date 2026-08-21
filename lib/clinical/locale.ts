@@ -136,3 +136,50 @@ export function localise(text: string, region: Region): string {
         "their study site, or emergency services if they are in immediate danger",
     );
 }
+
+/**
+ * The region implied by a subject ID that has been spoken but not yet verified.
+ *
+ * Verification happens several turns in, and the deterministic net fires on the
+ * first utterance — "March 11th 1958, sorry, I've been coughing up blood since
+ * last night" is the case this codebase already documents as routine. Resolving
+ * the region only from a *verified* subject meant that at the single most
+ * time-critical moment the agent had, it said "your local emergency number"
+ * instead of a number.
+ *
+ * The site prefix of a subject ID is enough to answer "which country's emergency
+ * services", and it is said before the date of birth. This is a hint and nothing
+ * else: it decides which number to speak aloud and is never used to unlock a
+ * clinical write, which stays behind two-factor verification. The worst case is
+ * someone mis-stating their ID and hearing the wrong country's number — no worse
+ * than the hedge it replaces, and better for everyone who states it correctly.
+ */
+export function regionFromSpokenId(
+  utterances: readonly string[],
+  siteCountryFor: (sitePrefix: string) => string | null,
+): Region {
+  for (const utterance of [...utterances].reverse()) {
+    const match = /\b(\d{3})\s*[-–—]?\s*(\d{4})\b/.exec(utterance);
+    if (!match) continue;
+    const country = siteCountryFor(match[1]);
+    if (country) return regionFor(country);
+  }
+  return UNKNOWN_REGION;
+}
+
+/**
+ * The region to speak numbers for, best available answer first.
+ *
+ * A verified subject is authoritative. Failing that, the site prefix of an ID the
+ * subject has already said. Failing that, the hedge — which is correct when the
+ * country is genuinely unknowable and wrong as a default when it is not.
+ */
+export function speakingRegion(
+  subjectCountry: string | null | undefined,
+  utterances: readonly string[],
+  siteCountryFor: (sitePrefix: string) => string | null,
+): Region {
+  const verified = regionFor(subjectCountry);
+  if (verified !== UNKNOWN_REGION) return verified;
+  return regionFromSpokenId(utterances, siteCountryFor);
+}

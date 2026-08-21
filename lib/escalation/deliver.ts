@@ -210,12 +210,29 @@ async function attemptDelivery(
   let providerId: string;
   try {
     if (session.synthetic) {
-      // Recorded in full, sent to nobody. The eval harness drives the same
-      // escalation path the console does, so without this every `npm run
-      // eval:fast` pages a real coordinator three times — and a test suite that
-      // emails a human on every run is one people stop running. The delivery row
-      // still shows exactly what would have gone out and to whom.
-      providerId = "suppressed:synthetic-session";
+      // Recorded in full, sent to nobody, and filed under its own status rather
+      // than as a delivery. Reporting it as `sent` with an audit reason reading
+      // "accepted by the delivery provider" said something untrue in the one
+      // subsystem built to stop that — and left the sweeper walking the ladder
+      // on pages that were never sent, writing UNACKNOWLEDGED and ALARM entries
+      // for them.
+      await store.markSuppressed(delivery.id);
+      session.audit.record({
+        actor: "system",
+        action: "ESCALATION_DELIVERY_SUPPRESSED",
+        entity: "Escalation",
+        entityId: escalation.id,
+        after: { deliveryId: delivery.id, wouldHaveGoneTo: to, attempt, tier },
+        reason:
+          "This session was created by the evaluation harness, so the escalation " +
+          "was recorded and not sent. Nobody was notified, and nobody was meant " +
+          "to be.",
+      });
+      return {
+        delivered: true,
+        delivery: { ...delivery, status: "suppressed" },
+        detail: null,
+      };
     } else {
       ({ providerId } = await transport.send({
         ...message,
