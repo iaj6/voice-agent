@@ -189,7 +189,11 @@ export type AgentEvent =
   | { type: "done"; terminal: boolean }
   | { type: "error"; message: string };
 
-function safetyNetSystemMessage(hits: SafetyNetHit[], delivered: boolean): string {
+function safetyNetSystemMessage(
+  hits: SafetyNetHit[],
+  delivered: boolean,
+  escalationId: string,
+): string {
   const lines = hits.map(
     (h) =>
       `- [${h.urgency.toUpperCase()}] ${h.category} (matched: "${h.matchedPhrase}"). ${h.instruction}`,
@@ -202,6 +206,18 @@ function safetyNetSystemMessage(hits: SafetyNetHit[], delivered: boolean): strin
     : "\n\nThe page did NOT go through. Nobody has been notified. Do NOT tell the " +
       "subject their coordinator has been alerted. Tell them to call emergency " +
       "services if it is an emergency, and to call their study site directly.";
+
+  // The escalation already exists and has already been through delivery. The
+  // rule text above asks for a tool call "if you have not already", which the
+  // model cannot evaluate — its dedupe key is the exact reason string, and the
+  // one written here is machine-generated text the model will never reproduce.
+  // The result was two escalation records and two emails for one emergency, in a
+  // queue where a coordinator counting escalations is counting things that
+  // happened to a person.
+  const alreadyRaised =
+    `\n\nAn escalation (${escalationId}) has ALREADY been raised for this and ` +
+    "delivery has already been attempted. Do NOT call escalate_to_coordinator " +
+    "for it — doing so pages the coordinator a second time for one event.";
   return (
     "TRIAL SAFETY SYSTEM — AUTOMATED ALERT.\n\n" +
     "The subject's last utterance matched one or more deterministic safety rules. " +
@@ -209,7 +225,8 @@ function safetyNetSystemMessage(hits: SafetyNetHit[], delivered: boolean): strin
     "every instruction below before doing anything else, and do not mention this " +
     "alert to the subject.\n\n" +
     lines.join("\n") +
-    notification
+    notification +
+    alreadyRaised
   );
 }
 
@@ -375,11 +392,11 @@ export async function* runTurn(
     // depend on model judgment, so it must not depend on the model choosing to
     // call a tool either — it raises its own page, on its own.
     const delivery = await deliverEscalation(session, record);
-    if (!delivery.delivered) {
-      // The subject is mid-emergency and nobody has been reached. The operator
-      // message below tells the agent to say so rather than reassure.
-      yield { type: "error", message: `Escalation was not delivered: ${delivery.detail}` };
-    }
+    // Deliberately not yielded as an `error`. The transport treats an error event
+    // as "the turn broke" and speaks a fallback line — which promised the subject
+    // a coordinator would call, the exact false claim this whole change exists to
+    // remove. The failure is audited, and the operator message below tells the
+    // agent what it may and may not say.
     await saveSession(session);
 
     yield { type: "safety", hits };
@@ -388,7 +405,7 @@ export async function* runTurn(
     // Operator channel. The subject cannot forge this and it survives caching.
     session.messages.push({
       role: "system",
-      content: safetyNetSystemMessage(hits, delivery.delivered),
+      content: safetyNetSystemMessage(hits, delivery.delivered, record.id),
     });
   }
 

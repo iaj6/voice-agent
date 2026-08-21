@@ -189,6 +189,18 @@ class PostgresKeyStore implements KeyStore {
          set key = null, destroyed_at = now(), destroyed_reason = ${reason}
        where subject_id = ${subjectId} and key is not null
       returning session_id`) as { session_id: string }[];
+
+    // escalation_delivery carries subject_id in the clear — it has to, because a
+    // coordinator's inbox is not the place to look up who a page was about, and
+    // the alarm query needs it. Sealing was designed around one key per session
+    // and this table sits outside that, so shredding has to reach it explicitly
+    // or "that subject had an emergency escalation on that date" survives an
+    // erasure. Defence in depth rather than a complete answer: see the residual
+    // note in docs/RETENTION.md D4.
+    await sql`
+      update escalation_delivery set subject_id = null, updated_at = now()
+       where subject_id = ${subjectId}`;
+
     return rows.length;
   }
 

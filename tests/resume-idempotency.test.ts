@@ -333,9 +333,18 @@ test("a duplicate emergency escalation still ends the call", async () => {
   const second = await executeTool(session, "escalate_to_coordinator", args);
 
   assert.match(JSON.stringify(second.result), /ended_early|emergency care/);
+  // Either outcome is legitimate — suppressed because it was already delivered,
+  // or retried because it never was — but both have to be on the record. A page
+  // requested a second time is a fact about the call.
   assert.ok(
-    session.audit.all().some((e) => e.action === "ESCALATION_SUPPRESSED_DUPLICATE"),
-    "a requested page that was not raised must be visible",
+    session.audit
+      .all()
+      .some(
+        (e) =>
+          e.action === "ESCALATION_SUPPRESSED_DUPLICATE" ||
+          e.action === "ESCALATION_DUPLICATE_REDELIVERED",
+      ),
+    "a page requested a second time left no trace",
   );
 });
 

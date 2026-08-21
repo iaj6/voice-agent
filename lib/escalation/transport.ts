@@ -13,6 +13,8 @@ export interface EscalationMessage {
   subject: string;
   text: string;
   html: string;
+  /** Bounds how long a live call may wait on this. See EMERGENCY_TIMEOUT_MS. */
+  urgency?: "emergency" | "urgent" | "routine";
 }
 
 export interface SendResult {
@@ -33,6 +35,18 @@ export class DeliveryFailure extends Error {
     this.detail = detail;
   }
 }
+
+/**
+ * How long a send may block before we give up.
+ *
+ * Split by urgency because delivery is awaited before the model is invoked, so
+ * this is dead air on a live call. A participant who has just said "I can't
+ * breathe" waiting fifteen seconds in silence is a worse outcome than a page
+ * that failed and was recorded as failed — and the fallback on that path tells
+ * them to call 911 directly, which is the right thing to say quickly.
+ */
+const EMERGENCY_TIMEOUT_MS = 4_000;
+const STANDARD_TIMEOUT_MS = 15_000;
 
 class ResendTransport implements EscalationTransport {
   readonly channel = "email:resend";
@@ -60,7 +74,9 @@ class ResendTransport implements EscalationTransport {
           text: message.text,
           html: message.html,
         }),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(
+          message.urgency === "emergency" ? EMERGENCY_TIMEOUT_MS : STANDARD_TIMEOUT_MS,
+        ),
       });
     } catch (err) {
       throw new DeliveryFailure(`could not reach the mail provider: ${String(err)}`);

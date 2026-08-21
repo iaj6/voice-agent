@@ -173,11 +173,22 @@ interface NetRule {
   instruction: string;
 }
 
+/**
+ * Deliberately says nothing about whether a coordinator has been notified.
+ *
+ * It used to assert "you are alerting their study coordinator", which is a claim
+ * about the state of a mail transport baked into a safety rule. When delivery
+ * failed, the operator message carried this text *and* an appended line saying
+ * the opposite, instructing both behaviours at once — in the subsystem whose
+ * whole premise is that safety controls do not depend on model judgment. The
+ * notification status now has exactly one source: the line the runner appends
+ * after an actual delivery attempt.
+ */
 const EMERGENCY_INSTRUCTION =
   "Stop the check-in script immediately. Tell the subject in one short sentence " +
-  "to hang up and call 911 (or their local emergency number) right now, and that " +
-  "you are alerting their study coordinator. Do not ask further screening " +
-  "questions. Do not offer reassurance, interpretation, or medical advice. Call " +
+  "to hang up and call 911 (or their local emergency number) right now. Do not " +
+  "ask further screening questions. Do not offer reassurance, interpretation, or " +
+  "medical advice. Call " +
   "escalate_to_coordinator with urgency 'emergency' if you have not already.";
 
 const URGENT_INSTRUCTION =

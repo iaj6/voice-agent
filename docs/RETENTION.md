@@ -314,6 +314,17 @@ participant.
    Data collected before the withdrawal is retained, per ICH E6 and EDPB 3/2019;
    destruction stays a separate, separately authorised act.
 
+**What survives a shred, and why.** Destroying a key destroys *content*, not the
+existence of a record. `check_in_session.subject_id`, timestamps, statuses, and the
+structure of the audit trail all remain — deliberately, because D4-a says the record is
+retained and because "prove this record existed" is half of what a regulator asks. So a
+shredded record still shows that subject 001-0042 had a check-in on a given date, and
+that an escalation was raised on it. `escalation_delivery.subject_id` is cleared on shred
+as defence in depth, but the session link makes that partial rather than complete. A
+policy that needed even the existence of a check-in to disappear would need D4-d, which
+destroys the audit trail's whole point. Worth stating so nobody discovers it during an
+erasure request.
+
 **Threat model, stated plainly.** Keys sit in the same database as the ciphertext,
 so anyone who can read the data can read the keys while they exist. That is not an
 oversight: what this defends against is *being unable to prove destruction*, and a

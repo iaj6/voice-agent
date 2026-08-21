@@ -32,21 +32,56 @@ export interface DeliveryOutcome {
   detail: string | null;
 }
 
-function baseUrl(): string {
-  return (
-    process.env.VOICE_AGENT_PUBLIC_URL ??
-    process.env.VOICE_AGENT_URL ??
-    "http://localhost:3100"
-  );
+/**
+ * Where acknowledgement links point, or null if that cannot be answered.
+ *
+ * Null rather than a localhost default in production. Every other missing
+ * setting here is a loud delivery failure; this one used to fall back silently,
+ * so a deployment with mail configured but no public URL sent coordinators a
+ * page whose acknowledge button pointed at localhost — reported as delivered,
+ * never acknowledged, quietly overdue. Empty strings count as unset, because
+ * `??` let one through and produced a relative href inside an email.
+ */
+function ackBaseUrl(): string | null {
+  const configured =
+    process.env.VOICE_AGENT_PUBLIC_URL?.trim() || process.env.VOICE_AGENT_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  return process.env.NODE_ENV === "production" ? null : "http://localhost:3100";
 }
 
 export async function deliverEscalation(
   session: CheckInSession,
   escalation: EscalationRecord,
 ): Promise<DeliveryOutcome> {
+  // Everything is inside the guard, not just the send.
+  //
+  // Only transport.send() used to be wrapped, so a database hiccup while
+  // queueing the attempt threw straight out of this function: no delivery row,
+  // no ESCALATION_DELIVERY_FAILED entry, and — from the safety-net path, which
+  // has no catch — the whole turn aborted mid-emergency. "Never silent" has to
+  // survive the parts that are not the network.
+  try {
+    return await attemptDelivery(session, escalation);
+  } catch (err) {
+    return fail(
+      session,
+      escalation,
+      0,
+      "unknown",
+      "(unknown)",
+      `delivery could not be attempted: ${String(err)}`,
+    );
+  }
+}
+
+async function attemptDelivery(
+  session: CheckInSession,
+  escalation: EscalationRecord,
+): Promise<DeliveryOutcome> {
   const store = getDeliveryStore();
   const transport = getTransport();
   const to = escalationRecipient();
+  const link = ackBaseUrl();
   const attempt = (await store.attemptsFor(session.id, escalation.id)) + 1;
 
   // No recipient is a delivery failure, not a skip. A system with nowhere to
@@ -59,6 +94,19 @@ export async function deliverEscalation(
       transport.channel,
       "(none)",
       "ESCALATION_EMAIL_TO is not set, so there is nowhere to send this",
+    );
+  }
+  if (!link) {
+    // The one setting that used to fail quietly. A page whose acknowledgement
+    // button points at localhost is reported as delivered, is never
+    // acknowledged, and silently becomes an overdue row.
+    return fail(
+      session,
+      escalation,
+      attempt,
+      transport.channel,
+      to,
+      "no public base URL is configured, so the acknowledgement link would be unreachable",
     );
   }
 
@@ -86,37 +134,63 @@ export async function deliverEscalation(
     coordinatorName: session.subject?.coordinatorName ?? null,
     siteName: session.subject?.siteName ?? null,
     raisedAt: escalation.createdAt,
-    ackUrl: `${baseUrl()}/api/escalation/ack?t=${token}`,
+    ackUrl: `${link}/api/escalation/ack?t=${token}`,
     deadline,
   });
 
+  let providerId: string;
   try {
-    const { providerId } = await transport.send({ ...message, to });
-    await store.markSent(delivery.id, providerId);
-    session.audit.record({
-      actor: "system",
-      action: "ESCALATION_DELIVERED",
-      entity: "Escalation",
-      entityId: escalation.id,
-      after: {
-        deliveryId: delivery.id,
-        channel: transport.channel,
-        destination: to,
-        providerId,
-        attempt,
-        acknowledgeBy: deadline.toISOString(),
-      },
-      reason:
-        "The escalation was accepted by the delivery provider. It is not " +
-        "acknowledged until a human opens it.",
-    });
-    return { delivered: true, delivery: { ...delivery, status: "sent", providerId }, detail: null };
+    ({ providerId } = await transport.send({ ...message, to, urgency: escalation.urgency }));
   } catch (err) {
     const detail =
       err instanceof DeliveryFailure ? err.detail : `unexpected error: ${String(err)}`;
-    await store.markFailed(delivery.id, detail);
+    // Bookkeeping must not turn a failure into a thrown error.
+    await store.markFailed(delivery.id, detail).catch(() => {});
     return fail(session, escalation, attempt, transport.channel, to, detail, delivery);
   }
+
+  // Sent. From here the message is in the coordinator's inbox and nothing that
+  // happens to our own records can make that untrue — recording the send used to
+  // sit inside the same try, so a database failure after a successful send told
+  // the subject nobody had been notified while the page sat in an inbox, and
+  // marked the row `failed`, which the overdue alarm excludes.
+  try {
+    await store.markSent(delivery.id, providerId);
+  } catch (err) {
+    session.audit.record({
+      actor: "system",
+      action: "ESCALATION_DELIVERY_UNRECORDED",
+      entity: "Escalation",
+      entityId: escalation.id,
+      after: { deliveryId: delivery.id, providerId, error: String(err) },
+      reason:
+        "The escalation was delivered but the delivery record could not be " +
+        "updated. It was sent; the acknowledgement alarm may not track it.",
+    });
+  }
+
+  session.audit.record({
+    actor: "system",
+    action: "ESCALATION_DELIVERED",
+    entity: "Escalation",
+    entityId: escalation.id,
+    after: {
+      deliveryId: delivery.id,
+      channel: transport.channel,
+      destination: to,
+      providerId,
+      attempt,
+      acknowledgeBy: deadline.toISOString(),
+    },
+    reason:
+      "The escalation was accepted by the delivery provider. It is not " +
+      "acknowledged until a human opens it.",
+  });
+  return {
+    delivered: true,
+    delivery: { ...delivery, status: "sent", providerId },
+    detail: null,
+  };
 }
 
 /**

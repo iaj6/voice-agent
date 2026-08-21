@@ -248,8 +248,12 @@ export async function POST(request: Request) {
             if (!spoke) {
               send(
                 sseChunk(completionId, model, {
+                  // Promises nothing this system can keep. The old wording said
+                  // a coordinator would call, which is a claim a broken turn is
+                  // in no position to make — and it fired on exactly the paths
+                  // where nobody had been reached.
                   content:
-                    "I'm sorry, I'm having trouble with the connection. Let me have your study coordinator call you.",
+                    "I'm sorry, something has gone wrong on my end and I can't continue. Please call your study site directly, and call 911 if this is an emergency.",
                 }),
               );
               spoke = true;

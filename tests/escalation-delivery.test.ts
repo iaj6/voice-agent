@@ -217,3 +217,76 @@ test("a delivery that failed is not counted as awaiting acknowledgement", async 
     "a failed send appears in the non-ack alarm, which is a different problem",
   );
 });
+
+test("a duplicate whose page never went out is retried, not suppressed", async () => {
+  // The model is told isError when delivery fails, so it retries — and the
+  // duplicate branch used to return "already raised" with no isError and no
+  // delivery. Nothing in the system retries on its own and overdue() excludes
+  // failed rows, so that page had no alarm surface at all: silently lost.
+  __setTransport(new BrokenTransport());
+  const session = await verifiedCall();
+  const first = await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  assert.equal((first.result as Record<string, unknown>).delivered, false);
+
+  __setTransport(transport);
+  const second = await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const result = second.result as Record<string, unknown>;
+
+  assert.equal(result.already_raised, true, "a second escalation record was created");
+  assert.equal(result.delivered, true, "the retry never attempted a send");
+  assert.equal(transport.sent.length, 1, "the retry did not go out");
+  assert.equal(session.escalations.length, 1, "one event became two escalations");
+});
+
+test("a duplicate emergency that still cannot be delivered ends the call", async () => {
+  // Both halves matter. An emergency ends the call whether or not the page went
+  // through, and a failed page is a stronger reason to end it, not a weaker one.
+  __setTransport(new BrokenTransport());
+  const session = await verifiedCall();
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const second = await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const instruction = String((second.result as Record<string, unknown>).instruction);
+
+  assert.match(instruction, /ended_early/, "a duplicate emergency did not end the call");
+  assert.match(instruction, /911/);
+  assert.equal(second.isError, true);
+});
+
+test("a duplicate that was already delivered is suppressed, not sent twice", async () => {
+  const session = await verifiedCall();
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+
+  assert.equal(transport.sent.length, 1, "one event paged the coordinator twice");
+  assert.ok(
+    session.audit.all().some((e) => e.action === "ESCALATION_SUPPRESSED_DUPLICATE"),
+  );
+});
+
+test("a store failure is a recorded delivery failure, not a thrown error", async () => {
+  // "Never silent" has to survive the parts that are not the network. Only the
+  // send used to be guarded, so a database hiccup while queueing threw straight
+  // out — no delivery row, no audit entry, and from the safety-net path no catch
+  // at all, aborting the turn mid-emergency.
+  const session = await verifiedCall();
+  __setDeliveryStore({
+    kind: "memory",
+    queue: async () => {
+      throw new Error("connection terminated unexpectedly");
+    },
+    markSent: async () => {},
+    markFailed: async () => {},
+    acknowledge: async () => null,
+    forSession: async () => [],
+    overdue: async () => [],
+    attemptsFor: async () => 0,
+  });
+
+  const out = await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  assert.equal((out.result as Record<string, unknown>).delivered, false);
+  assert.equal(out.isError, true);
+  assert.ok(
+    session.audit.all().some((e) => e.action === "ESCALATION_DELIVERY_FAILED"),
+    "a store failure produced no record that the page did not go",
+  );
+});

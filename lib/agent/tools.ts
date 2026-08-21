@@ -19,6 +19,7 @@ import {
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
 import { deliverEscalation } from "../escalation/deliver.ts";
+import { getDeliveryStore } from "../store/deliveries.ts";
 import { getKeyStore } from "../store/keys.ts";
 import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
 
@@ -1268,6 +1269,63 @@ const handlers: Record<string, Handler> = {
         naturalKey(urgency, reasonText, [...relatedIds].sort().join(",")),
     );
     if (duplicate) {
+      // A duplicate escalation is not necessarily a delivered one. The first
+      // attempt may have failed, the model may be retrying *because* it was told
+      // the call errored — and returning "already raised" would strand a page
+      // nobody received, with no retry anywhere in the system and no alarm,
+      // because overdue() deliberately excludes failed rows.
+      const priorAttempts = await getDeliveryStore().forSession(session.id);
+      const everDelivered = priorAttempts.some(
+        (d) => d.escalationId === duplicate.id && d.status !== "failed",
+      );
+      if (!everDelivered) {
+        // Recorded before the attempt, like the suppression path it replaces. A
+        // page that was requested a second time is a fact about the call whether
+        // it was suppressed, retried, or retried and failed again.
+        session.audit.record({
+          actor: "system",
+          action: "ESCALATION_DUPLICATE_REDELIVERED",
+          entity: "Escalation",
+          entityId: duplicate.id,
+          after: { urgency, reason: reasonText, relatedEventIds: relatedIds },
+          reason:
+            "This escalation was already on the record but had never been " +
+            "delivered, so the duplicate request was treated as a retry rather " +
+            "than suppressed.",
+        });
+        const retry = await deliverEscalation(session, duplicate);
+        return {
+          result: {
+            escalation_id: duplicate.id,
+            urgency: duplicate.urgency,
+            already_raised: true,
+            delivered: retry.delivered,
+            delivery_error: retry.detail,
+            instruction: retry.delivered
+              ? "Already raised, and now delivered. Do not raise it again. " +
+                (duplicate.urgency === "emergency"
+                  ? "Tell the subject to seek emergency care now, then call " +
+                    "complete_check_in with ended_early true."
+                  : "Continue the check-in if it is safe to do so.")
+              : // Still branches on urgency. An earlier fix made a duplicate
+                // EMERGENCY end the call, and writing one instruction for both
+                // outcomes quietly undid it — an emergency ends the call whether
+                // or not the page went through, and a failed page is a stronger
+                // reason to end it, not a weaker one.
+                duplicate.urgency === "emergency"
+                ? "Already raised, and it still has NOT been delivered. Do not " +
+                  "tell the subject anyone has been notified. Tell them in one " +
+                  "sentence to call 911 now and their study site directly, then " +
+                  "call complete_check_in with ended_early true. Ask nothing further."
+                : "Already raised, and it still has NOT been delivered. Do not " +
+                  "tell the subject anyone has been notified. Tell them to call " +
+                  "their study site directly, then continue the check-in if it " +
+                  "is safe to do so.",
+          },
+          isError: !retry.delivered,
+        };
+      }
+
       // Audited, like the other two idempotency paths. A page that was requested
       // and not raised is otherwise invisible to anyone reconstructing the call.
       session.audit.record({

@@ -22,8 +22,11 @@ export async function GET(request: Request) {
   const token = new URL(request.url).searchParams.get("t");
   if (!token) return page("Missing link", "That link is incomplete.", false);
 
+  // `||`, not `??`. A present-but-empty X-Forwarded-For is common behind some
+  // proxies, and `??` only fires when the header is absent — so acknowledged_by
+  // came out blank on the one field this route exists to record.
   const by =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "link recipient";
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "link recipient";
 
   const record = await getDeliveryStore().acknowledge(token, by);
   if (!record) {
