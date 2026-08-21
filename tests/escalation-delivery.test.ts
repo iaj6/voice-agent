@@ -27,6 +27,8 @@ import {
 import { ACK_SLA_MS } from "../lib/escalation/sla.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
+process.env.VOICE_AGENT_PUBLIC_URL = "http://localhost:3100";
+
 const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
 const SPOKEN = "I've been very tired, my daughter Sarah drove me to Northlake";
 
@@ -86,21 +88,53 @@ test("an escalation is actually sent, and the record says who to", async () => {
   assert.equal(deliveries[0].providerId, "test_1");
 });
 
-test("the notification carries no transcript, verbatim or date of birth", async () => {
+test("model free text never leaves the system by email", async () => {
+  // The escalation `reason` is written by the model, prompted by its own schema
+  // for "what the coordinator needs to know", and screened by nothing. A model
+  // paraphrasing what the subject just said would have shipped names, places and
+  // symptoms to a mail provider under a header promising it carried none.
   const session = await verifiedCall();
-  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "Her daughter Sarah is driving her to Northlake; born 1958-03-11.",
+    related_event_ids: [],
+  });
 
   const body = transport.sent[0].text + transport.sent[0].html + transport.sent[0].subject;
-  assert.ok(!body.includes("Sarah"), "a name the subject spoke went out by email");
-  assert.ok(!body.includes("1958-03-11"), "the date of birth went out by email");
+  assert.ok(!body.includes("Sarah"), "a name from the model's reason went out by email");
+  assert.ok(!body.includes("1958-03-11"), "a date of birth went out by email");
+  assert.ok(!body.includes("driving her"), "the model's prose went out verbatim");
   assert.ok(!body.includes(SPOKEN), "the transcript went out by email");
-  // The site name is in there and belongs there: it comes from the roster, and
-  // the person receiving this works at that site. What must not travel is
-  // anything that is in the message *because the subject said it*.
 
-  // What a coordinator genuinely needs to triage, and no more.
+  // What a coordinator genuinely needs to act, and no more.
   assert.ok(body.includes("001-0042"), "the subject id is missing, so nobody can act");
-  assert.ok(body.includes("cardiac or respiratory"), "the reason is missing");
+  assert.ok(body.includes("URGENT"), "the urgency is missing");
+  assert.match(body, /ack\?t=/, "there is no way to acknowledge it");
+});
+
+test("the notification says what it is about, from structured fields", async () => {
+  const session = await verifiedCall();
+  await executeTool(session, "record_adverse_event", {
+    verbatim_term: "I've been very tired",
+    coded_term: "Fatigue",
+    onset_description: "this week",
+    ongoing: true,
+    grade: 3,
+    grade_rationale: "Could not shower.",
+    limits_self_care: true,
+    spontaneous: true,
+  });
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "urgent",
+    reason: "anything the model felt like writing here",
+    related_event_ids: ["AE-001"],
+  });
+
+  const body = transport.sent[0].text;
+  // Coded term and grade: eCRF vocabulary, which the retention analysis already
+  // classed as structured data that identifies nobody.
+  assert.match(body, /Fatigue \(grade 3\)/, "the coordinator cannot tell what this is about");
+  assert.ok(!body.includes("very tired"), "the verbatim went out with it");
 });
 
 test("a failed send never claims anyone was notified", async () => {
@@ -276,6 +310,7 @@ test("a store failure is a recorded delivery failure, not a thrown error", async
     },
     markSent: async () => {},
     markFailed: async () => {},
+    find: async () => null,
     acknowledge: async () => null,
     forSession: async () => [],
     overdue: async () => [],
@@ -289,4 +324,86 @@ test("a store failure is a recorded delivery failure, not a thrown error", async
     session.audit.all().some((e) => e.action === "ESCALATION_DELIVERY_FAILED"),
     "a store failure produced no record that the page did not go",
   );
+});
+
+test("a link scanner fetching the URL does not acknowledge anything", async () => {
+  // Enterprise mail security GETs every URL in an inbound message before a human
+  // sees it. A side-effecting GET meant every escalation was acknowledged from a
+  // scanner's IP within seconds of the send — disarming the only alarm for
+  // "nobody responded to an emergency", and permanently recording a robot as the
+  // responder, because the first acknowledgement is the one that counts.
+  const { GET, POST } = await import("../app/api/escalation/ack/route.ts");
+  const session = await verifiedCall();
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const token = transport.sent[0].text.match(/ack\?t=([A-Za-z0-9_-]+)/)![1];
+  const url = `http://localhost:3100/api/escalation/ack?t=${token}`;
+
+  const scanned = await GET(new Request(url));
+  assert.equal(scanned.status, 200, "the scanner should see a page, not an error");
+
+  const store = getDeliveryStore();
+  const [afterScan] = await store.forSession(session.id);
+  assert.equal(afterScan.acknowledgedAt, null, "a GET acknowledged the escalation");
+  assert.equal(afterScan.status, "sent");
+
+  // Still overdue, because nobody has actually responded.
+  const past = new Date(Date.now() + ACK_SLA_MS.emergency + 1000);
+  assert.equal((await store.overdue(past)).length, 1, "the alarm was disarmed by a scanner");
+
+  // A human pressing the button is what records it.
+  const form = new FormData();
+  form.set("t", token);
+  const confirmed = await POST(
+    new Request(url, { method: "POST", body: form, headers: { "x-forwarded-for": "203.0.113.9" } }),
+  );
+  assert.equal(confirmed.status, 200);
+  const [afterClick] = await store.forSession(session.id);
+  assert.equal(afterClick.status, "acknowledged");
+  assert.equal(afterClick.acknowledgedBy, "203.0.113.9");
+  assert.deepEqual(await store.overdue(past), [], "acknowledging did not clear the alarm");
+});
+
+test("the deterministic net does not page twice for the same rules", async () => {
+  // A subject told to hang up who says "I still can't breathe" trips the same
+  // rule again. Duplicate escalation records were free before delivery existed;
+  // duplicate pages are not.
+  const { runTurn } = await import("../lib/agent/runner.ts");
+  const session = await getSessionStore().create();
+  for (const utterance of ["I can't breathe", "I still can't breathe"]) {
+    for await (const ev of runTurn(session, { source: "subject", utterance })) {
+      if (ev.type === "error") break;
+    }
+  }
+
+  const netEscalations = session.escalations.filter((e) => e.triggeredBy === "safety_net");
+  assert.equal(netEscalations.length, 1, "one emergency produced two escalation records");
+  assert.equal(transport.sent.length, 1, "one emergency paged the coordinator twice");
+  assert.ok(
+    session.audit.all().some((e) => e.action === "ESCALATION_SUPPRESSED_DUPLICATE"),
+    "the repeat trigger left no trace",
+  );
+});
+
+test("a provider that keeps failing stops eating the call", async () => {
+  __setTransport(new BrokenTransport());
+  const session = await verifiedCall();
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const third = await executeTool(session, "escalate_to_coordinator", ESCALATE);
+  const result = third.result as Record<string, unknown>;
+
+  assert.equal(result.delivered, false);
+  assert.match(String(result.delivery_error), /not retrying/);
+  assert.match(String(result.instruction), /Do not try again/);
+  assert.notEqual(third.isError, true, "the model is still being told to retry");
+});
+
+test("a config failure still leaves a delivery row an operator can find", async () => {
+  delete process.env.ESCALATION_EMAIL_TO;
+  const session = await verifiedCall();
+  await executeTool(session, "escalate_to_coordinator", ESCALATE);
+
+  const rows = await getDeliveryStore().forSession(session.id);
+  assert.equal(rows.length, 1, "nothing was recorded, so nobody can see the misconfiguration");
+  assert.equal(rows[0].status, "failed");
 });

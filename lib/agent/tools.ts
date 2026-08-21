@@ -20,6 +20,9 @@ import {
 import { getSessionStore } from "../store/session-store.ts";
 import { deliverEscalation } from "../escalation/deliver.ts";
 import { getDeliveryStore } from "../store/deliveries.ts";
+
+/** How many times one escalation may block a live call on a failing provider. */
+const MAX_DELIVERY_ATTEMPTS = 2;
 import { getKeyStore } from "../store/keys.ts";
 import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
 
@@ -1275,9 +1278,41 @@ const handlers: Record<string, Handler> = {
       // nobody received, with no retry anywhere in the system and no alarm,
       // because overdue() deliberately excludes failed rows.
       const priorAttempts = await getDeliveryStore().forSession(session.id);
+      // "sent or acknowledged", not "not failed". A row can be stuck at `queued`
+      // when the outage that broke the send also broke the update that would
+      // have marked it failed — and markFailed deliberately swallows its own
+      // error. Treating queued as delivered re-strands the exact page this
+      // branch exists to rescue.
       const everDelivered = priorAttempts.some(
-        (d) => d.escalationId === duplicate.id && d.status !== "failed",
+        (d) =>
+          d.escalationId === duplicate.id &&
+          (d.status === "sent" || d.status === "acknowledged"),
       );
+      // Bounded. Without a cap the model sees isError, retries, blocks on another
+      // send, and repeats — up to MAX_TOOL_ITERATIONS times at up to 15s each,
+      // which is two minutes of silence on a live call. Past the cap the page is
+      // still undelivered and still recorded as such; what stops is the retrying.
+      const exhausted = priorAttempts.filter((d) => d.escalationId === duplicate.id).length;
+      if (!everDelivered && exhausted >= MAX_DELIVERY_ATTEMPTS) {
+        return {
+          result: {
+            escalation_id: duplicate.id,
+            urgency: duplicate.urgency,
+            already_raised: true,
+            delivered: false,
+            delivery_error: `delivery failed ${exhausted} times; not retrying`,
+            instruction:
+              duplicate.urgency === "emergency"
+                ? "This page cannot be delivered. Tell the subject in one sentence " +
+                  "to call 911 now and their study site directly, then call " +
+                  "complete_check_in with ended_early true. Do not try again."
+                : "This page cannot be delivered. Tell the subject to call their " +
+                  "study site directly. Do not try again; continue the check-in " +
+                  "if it is safe to do so.",
+          },
+        };
+      }
+
       if (!everDelivered) {
         // Recorded before the attempt, like the suppression path it replaces. A
         // page that was requested a second time is a fact about the call whether

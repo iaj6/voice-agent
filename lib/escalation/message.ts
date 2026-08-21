@@ -27,7 +27,22 @@ const URGENCY_LABEL: Record<EscalationUrgency, string> = {
 export interface EscalationNotice {
   escalationId: string;
   urgency: EscalationUrgency;
-  reason: string;
+  /**
+   * What this is about, in words the system chose.
+   *
+   * Never the model's free text. `escalate_to_coordinator` takes a `reason`
+   * written by the model — prompted, in its own schema, for "what the coordinator
+   * needs to know, in two sentences or less" — which is an open invitation to
+   * paraphrase what the subject just said. Nothing screens it, and this file
+   * promises the message carries no verbatim, no names, no transcript. A model
+   * writing "her daughter Sarah is driving her to Northlake" would have shipped
+   * exactly that to a mail provider.
+   *
+   * The caller derives this from structured fields: the safety-net category, or
+   * the coded terms of the events the escalation cites. The free text stays in
+   * the record, behind the link.
+   */
+  summary: string;
   subjectId: string | null;
   coordinatorName: string | null;
   siteName: string | null;
@@ -53,8 +68,8 @@ export function composeEscalation(notice: EscalationNotice): Omit<EscalationMess
     `Raised:      ${notice.raisedAt.replace("T", " ").slice(0, 16)} UTC`,
     `Respond by:  ${respondBy}`,
     "",
-    "Why:",
-    `  ${notice.reason}`,
+    "What:",
+    `  ${notice.summary}`,
     "",
     "Acknowledge, and open the full record:",
     `  ${notice.ackUrl}`,
@@ -77,7 +92,7 @@ ${row("Coordinator", notice.coordinatorName ?? "unassigned")}
 ${row("Raised", notice.raisedAt.replace("T", " ").slice(0, 16) + " UTC")}
 ${row("Respond by", respondBy)}
 </table>
-<p style="margin-top:16px"><strong>Why:</strong><br>${escapeHtml(notice.reason)}</p>
+<p style="margin-top:16px"><strong>What:</strong><br>${escapeHtml(notice.summary)}</p>
 <p style="margin-top:20px">
 <a href="${escapeHtml(notice.ackUrl)}"
    style="background:#1a73e8;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block">

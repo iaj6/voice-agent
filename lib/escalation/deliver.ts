@@ -42,6 +42,34 @@ export interface DeliveryOutcome {
  * never acknowledged, quietly overdue. Empty strings count as unset, because
  * `??` let one through and produced a relative href inside an email.
  */
+/**
+ * What the notification may say this is about, built only from structured fields.
+ *
+ * Urgency and category come from the deterministic net. Coded terms come from
+ * the eCRF, where they are the clinical vocabulary a coordinator reads — the
+ * retention analysis already classed coded terms and grades as structured data
+ * that identifies nobody, as against the verbatim, which does. Nothing here can
+ * carry a sentence the model wrote.
+ */
+function safeSummary(session: CheckInSession, escalation: EscalationRecord): string {
+  if (escalation.category) {
+    return `Deterministic safety rule: ${escalation.category}.`;
+  }
+
+  const cited = escalation.relatedEventIds
+    .map((id) => session.adverseEvents.find((e) => e.id === id))
+    .filter((e): e is NonNullable<typeof e> => Boolean(e))
+    .map((e) => `${e.codedTerm} (grade ${e.grade})`);
+
+  if (cited.length > 0) {
+    return `Adverse event(s) requiring review: ${cited.join("; ")}.`;
+  }
+  return (
+    "The check-in agent raised this for coordinator review. The details are in " +
+    "the record; they are deliberately not repeated in this message."
+  );
+}
+
 function ackBaseUrl(): string | null {
   const configured =
     process.env.VOICE_AGENT_PUBLIC_URL?.trim() || process.env.VOICE_AGENT_URL?.trim();
@@ -129,7 +157,7 @@ async function attemptDelivery(
   const message = composeEscalation({
     escalationId: escalation.id,
     urgency: escalation.urgency,
-    reason: escalation.reason,
+    summary: safeSummary(session, escalation),
     subjectId: session.subject?.subjectId ?? null,
     coordinatorName: session.subject?.coordinatorName ?? null,
     siteName: session.subject?.siteName ?? null,
@@ -209,6 +237,32 @@ async function fail(
   detail: string,
   delivery: DeliveryRecord | null = null,
 ): Promise<DeliveryOutcome> {
+  // A row even when nothing could be attempted. The config failures used to
+  // leave only a sealed audit entry, so attemptsFor() stayed at 0, `attempt`
+  // never advanced across retries, and the deployment most likely to hit them —
+  // a fresh environment with the env half set — was the one with nothing in
+  // escalation_delivery for an operator to notice.
+  if (!delivery) {
+    delivery = await getDeliveryStore()
+      .queue(
+        {
+          sessionId: session.id,
+          escalationId: escalation.id,
+          subjectId: session.subject?.subjectId ?? null,
+          urgency: escalation.urgency,
+          channel,
+          destination,
+          attempt: Math.max(attempt, 1),
+          deadlineAt: ackDeadline(escalation.urgency),
+        },
+        newAckToken(),
+      )
+      .catch(() => null);
+    if (delivery) {
+      await getDeliveryStore().markFailed(delivery.id, detail).catch(() => {});
+    }
+  }
+
   session.audit.record({
     actor: "system",
     action: "ESCALATION_DELIVERY_FAILED",

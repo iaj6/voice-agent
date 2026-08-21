@@ -354,6 +354,38 @@ export async function* runTurn(
 
   if (hits.length > 0) {
     const urgency = highestUrgency(hits)!;
+
+    // The tool path dedupes; this one did not, so a subject who says "I still
+    // can't breathe" after being told to hang up triggers the same rule again
+    // and pages the coordinator a second time for one event. Keyed on the
+    // categories that fired, because the reason string is derived from them and
+    // a repeat of the same rules is the same alarm.
+    const categories = hits
+      .map((h) => h.category)
+      .sort()
+      .join("; ");
+    const alreadyRaised = session.escalations.find(
+      (e) => e.triggeredBy === "safety_net" && e.reason.endsWith(categories),
+    );
+    if (alreadyRaised) {
+      session.audit.record({
+        actor: "safety_net",
+        action: "ESCALATION_SUPPRESSED_DUPLICATE",
+        entity: "Escalation",
+        entityId: alreadyRaised.id,
+        after: { categories, urgency },
+        reason:
+          "The same deterministic rules fired again on this call. The coordinator " +
+          "has already been paged for them and was not paged a second time.",
+      });
+      await saveSession(session);
+      yield { type: "safety", hits };
+      yield { type: "state", snapshot: snapshot(session) };
+      session.messages.push({
+        role: "system",
+        content: safetyNetSystemMessage(hits, true, alreadyRaised.id),
+      });
+    } else {
     const record = {
       id: nextEscalationId(session),
       urgency,
@@ -388,6 +420,13 @@ export async function* runTurn(
     // that must survive a crash on the very next line.
     await saveSession(session);
 
+    // Told before the mail round-trip, not after. These two used to fire
+    // immediately; putting delivery in front of them left the console with no
+    // safety event and no state update for up to four seconds — exactly the
+    // window where it most needs to show something.
+    yield { type: "safety", hits };
+    yield { type: "state", snapshot: snapshot(session) };
+
     // And deliver it. The deterministic net is the escalation that must not
     // depend on model judgment, so it must not depend on the model choosing to
     // call a tool either — it raises its own page, on its own.
@@ -399,14 +438,12 @@ export async function* runTurn(
     // agent what it may and may not say.
     await saveSession(session);
 
-    yield { type: "safety", hits };
-    yield { type: "state", snapshot: snapshot(session) };
-
     // Operator channel. The subject cannot forge this and it survives caching.
     session.messages.push({
       role: "system",
       content: safetyNetSystemMessage(hits, delivery.delivered, record.id),
     });
+    }
   }
 
   // ---- 2. Model + tool loop -------------------------------------------------

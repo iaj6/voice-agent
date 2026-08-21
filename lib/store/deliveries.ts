@@ -54,6 +54,8 @@ export interface DeliveryStore {
   queue(input: NewDelivery, ackToken: string): Promise<DeliveryRecord>;
   markSent(id: string, providerId: string): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
+  /** Looks a delivery up by token without changing it. Used by the GET view. */
+  find(token: string): Promise<DeliveryRecord | null>;
   /** Acknowledges by token. Returns the record, or null if the token is unknown. */
   acknowledge(token: string, by: string): Promise<DeliveryRecord | null>;
   forSession(sessionId: string): Promise<DeliveryRecord[]>;
@@ -119,6 +121,14 @@ class MemoryDeliveryStore implements DeliveryStore {
     }
   }
 
+  async find(token: string): Promise<DeliveryRecord | null> {
+    const hash = hashToken(token);
+    for (const row of this.rows.values()) {
+      if (row.ackTokenHash === hash) return { ...row };
+    }
+    return null;
+  }
+
   async acknowledge(token: string, by: string): Promise<DeliveryRecord | null> {
     const hash = hashToken(token);
     for (const row of this.rows.values()) {
@@ -135,16 +145,22 @@ class MemoryDeliveryStore implements DeliveryStore {
   }
 
   async forSession(sessionId: string): Promise<DeliveryRecord[]> {
-    return [...this.rows.values()].filter((r) => r.sessionId === sessionId);
+    // Copies, like queue() and acknowledge(). Handing out the stored objects let
+    // a caller mutate store state — and leaked the private ackTokenHash with it.
+    return [...this.rows.values()]
+      .filter((r) => r.sessionId === sessionId)
+      .map((r) => ({ ...r }));
   }
 
   async overdue(now = new Date()): Promise<DeliveryRecord[]> {
-    return [...this.rows.values()].filter(
-      (r) =>
-        r.acknowledgedAt === null &&
-        r.status !== "failed" &&
-        Date.parse(r.deadlineAt) < now.getTime(),
-    );
+    return [...this.rows.values()]
+      .filter(
+        (r) =>
+          r.acknowledgedAt === null &&
+          r.status !== "failed" &&
+          Date.parse(r.deadlineAt) < now.getTime(),
+      )
+      .map((r) => ({ ...r }));
   }
 
   async attemptsFor(sessionId: string, escalationId: string): Promise<number> {
@@ -185,6 +201,14 @@ class PostgresDeliveryStore implements DeliveryStore {
       update escalation_delivery
          set status = 'failed', error = ${error}, updated_at = now()
        where id = ${id}`;
+  }
+
+  async find(token: string): Promise<DeliveryRecord | null> {
+    const sql = getDb();
+    const rows = (await sql`
+      select * from escalation_delivery
+       where ack_token_hash = ${hashToken(token)}`) as Record<string, unknown>[];
+    return rows.length > 0 ? rowToRecord(rows[0]) : null;
   }
 
   async acknowledge(token: string, by: string): Promise<DeliveryRecord | null> {
