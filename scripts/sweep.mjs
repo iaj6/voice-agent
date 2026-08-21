@@ -3,6 +3,7 @@
  *
  *   node scripts/sweep.mjs
  *   node scripts/sweep.mjs --at 2026-08-21T21:00:00Z   # pretend it is later
+ *   node scripts/sweep.mjs --digest                    # and send the daily summary
  *
  * The --at flag exists so the ladder can be exercised without waiting an hour
  * for an SLA to lapse. It only moves the sweeper's idea of now; the records keep
@@ -49,3 +50,11 @@ line("alarmed — nobody acknowledged", r.alarmed, C.bad);
 line("still inside their response window", r.stillWaiting, C.dim);
 line("orphaned — paged for something not on the record", r.orphaned, C.bad);
 console.log("");
+
+if (process.argv.includes("--digest")) {
+  const { sendDigest } = await import("../lib/escalation/digest.ts");
+  const d = await sendDigest(at);
+  console.log(`${C.bold("digest")}  ${d.outstanding} outstanding, ${d.overdue} overdue` +
+    (d.sent ? C.good("  sent") : C.dim(`  not sent — ${d.detail}`)));
+  console.log("");
+}

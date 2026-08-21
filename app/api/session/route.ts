@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSession, getSession, snapshot } from "@/lib/store/session";
 import { PROTOCOL } from "@/lib/clinical/protocol";
+import { windowState } from "@/lib/clinical/calling-hours";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,33 @@ export async function POST(request: Request) {
       resumable = false;
     }
   }
+  // Refused before anything is collected, not after.
+  //
+  // The check sits at session open rather than at verification because the
+  // alternative is asking a participant for their subject ID and date of birth
+  // — which land in the record as free text — and only then telling them to call
+  // back. Collecting identifying information we have no ability to act on is the
+  // wrong order. See docs/ONCALL.md D-C.
+  //
+  // Synthetic sessions bypass it: the eval harness is not a participant, and a
+  // test suite that only passes during office hours is a test suite that fails
+  // for reasons unrelated to the code.
+  const hours = windowState();
+  if (!hours.open && !synthetic) {
+    return NextResponse.json(
+      {
+        error: "closed",
+        message:
+          "The check-in line is closed right now. It reopens " +
+          `${hours.reopensDescription}. If this is an emergency, call your local ` +
+          "emergency number; for anything else, call your study site directly.",
+        reopens_at: hours.opensAt?.toISOString() ?? null,
+        reopens_description: hours.reopensDescription,
+      },
+      { status: 503, headers: { "Retry-After": retryAfterSeconds(hours.opensAt) } },
+    );
+  }
+
   const session = await createSession({ resumable, synthetic });
   return NextResponse.json({
     session: snapshot(session),
@@ -88,4 +116,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unknown session" }, { status: 404 });
   }
   return NextResponse.json({ session: snapshot(session) });
+}
+
+/** Seconds until the line reopens, clamped to something a client will respect. */
+function retryAfterSeconds(opensAt: Date | null): string {
+  if (!opensAt) return "3600";
+  const seconds = Math.max(60, Math.round((opensAt.getTime() - Date.now()) / 1000));
+  return String(Math.min(seconds, 86_400));
 }

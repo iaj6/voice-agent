@@ -1,14 +1,28 @@
-# On-call model and response times — decisions needed
+# On-call model and response times
 
-**Status:** options, awaiting decision · **Backlog item:** 2.6 (Tier C) · **Owner:** Ian Jones + site
+**Status:** decided 2026-08-21 · **Backlog item:** 2.6 (Tier C) · **Owner:** Ian Jones + site
 
-The escalation ladder is built and working: a page goes out, an unacknowledged one reaches
-a backup, and an exhausted ladder raises an alarm. What it does not have is a set of
-numbers anyone agreed to. The windows in `lib/escalation/sla.ts` are mine, invented so the
-code had something to compare against, and they are the wrong kind of thing to leave to an
-engineer.
+| | Decision | Chosen | Status |
+|---|---|---|---|
+| **D-A** | Response windows | **b** — 15 min / 4 h / next business day | **built** |
+| **D-B** | Who is on call | **b** — primary + backup, business hours | config |
+| **D-C** | Outside cover | **b** — the agent runs only when somebody is on call | **built** |
+| **D-D** | What the alarm does | **a+c** — mail, plus a daily digest of anything outstanding | **built** |
+| **D-E** | Who may acknowledge | **c** — a typed name on the confirmation | **built** |
+| **D-F** | Sweep cadence | **a** — one-minute cron | config (`vercel.json`) |
 
-Reply with a letter per decision and I will turn it into policy and the config it implies.
+The options each was chosen from are kept below, because a policy that records
+only the answer cannot be re-argued when the facts change — and the biggest fact
+here, who is actually on call and when, is still the site's to state.
+
+**Not yet set:** `VOICE_AGENT_CALL_WINDOW` is unconfigured, which means always
+open. Everything in D-C is inert until the site says its hours.
+
+The escalation ladder was built and working before any of this: a page goes out, an
+unacknowledged one reaches a backup, and an exhausted ladder raises an alarm. What it did
+not have was a set of numbers anyone had agreed to — the windows in `lib/escalation/sla.ts`
+were invented so the code had something to compare against, which is the wrong kind of
+thing to leave to an engineer.
 
 ---
 
@@ -45,18 +59,22 @@ for everything else.
 | Retry | 3 out-of-band retries, 60s backoff, then the ladder moves on |
 | Acknowledgement | one-time signed link; a GET shows a button, a POST records it; scanners cannot acknowledge |
 | Alarm | audit entry on the participant's record, plus a message to the alarm address |
-| Windows | **placeholders**: emergency 5 min, urgent 60 min, routine 24 h |
-| Sweeper | `POST /api/escalation/sweep`, shared-secret; **nothing schedules it yet** |
+| Windows | 15 min / 4 h / next business day, per D-A. Routine resolves against the call window rather than a fixed offset |
+| Sweeper | `POST /api/escalation/sweep`, shared-secret, scheduled every minute in `vercel.json` |
+| Digest | `POST /api/escalation/digest`, weekday mornings; silent when nothing is outstanding |
+| Calling window | `POST /api/session` returns 503 with a reopen time outside cover |
+| Acknowledgement | a typed name, kept alongside the requesting address |
 
-Two gaps worth naming before the options, because they change what the options mean.
+Two gaps prompted D-C and D-F, and both are now closed in code. They are recorded here
+because they were made by accident rather than decided:
 
-**Nothing schedules the sweep.** The ladder only advances when something calls it. Until a
-cron exists, an unacknowledged emergency stays unacknowledged forever and no backup is ever
-paged. This is config, not code, and it is the single most load-bearing line of ops in the
-system.
+**Nothing scheduled the sweep.** The ladder only advances when something calls it, so an
+unacknowledged emergency stayed unacknowledged forever and no backup was ever paged — the
+single most load-bearing line of ops in the system, and it did not exist.
 
-**Nothing restricts when a check-in can happen.** The agent will take a call at 03:00 and
-escalate into an inbox nobody is watching. See D-C, which is the decision this creates.
+**Nothing restricted when a check-in could happen.** The agent would take a call at 03:00
+and escalate into an inbox nobody was watching, which made "your coordinator has been
+alerted" true by luck of the hour.
 
 ---
 

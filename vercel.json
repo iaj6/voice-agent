@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/escalation/sweep", "schedule": "* * * * *" },
+    { "path": "/api/escalation/digest", "schedule": "0 8 * * 1-5" }
+  ]
+}

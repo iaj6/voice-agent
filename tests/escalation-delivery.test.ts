@@ -353,15 +353,25 @@ test("a link scanner fetching the URL does not acknowledge anything", async () =
   assert.equal((await store.overdue(past)).length, 1, "the alarm was disarmed by a scanner");
 
   // A human pressing the button is what records it.
+  // A name is required now: an IP is not a record of a human taking
+  // responsibility. Posting without one records nothing.
+  const nameless = new FormData();
+  nameless.set("t", token);
+  const refused = await POST(new Request(url, { method: "POST", body: nameless }));
+  assert.equal(refused.status, 400, "an unnamed acknowledgement was accepted");
+  assert.equal((await store.forSession(session.id))[0].acknowledgedAt, null);
+
   const form = new FormData();
   form.set("t", token);
+  form.set("by", "Dana Whitfield, RN");
   const confirmed = await POST(
     new Request(url, { method: "POST", body: form, headers: { "x-forwarded-for": "203.0.113.9" } }),
   );
   assert.equal(confirmed.status, 200);
   const [afterClick] = await store.forSession(session.id);
   assert.equal(afterClick.status, "acknowledged");
-  assert.equal(afterClick.acknowledgedBy, "203.0.113.9");
+  assert.match(afterClick.acknowledgedBy!, /Dana Whitfield, RN/);
+  assert.match(afterClick.acknowledgedBy!, /203\.0\.113\.9/, "the address is kept alongside");
   assert.deepEqual(await store.overdue(past), [], "acknowledging did not clear the alarm");
 });
 

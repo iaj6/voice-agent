@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     `${record.urgency.toUpperCase()} escalation`,
     `Escalation ${esc(record.escalationId)} for subject ${esc(record.subjectId ?? "unidentified")}. ` +
       `Response deadline ${esc(when(record.deadlineAt))}. ` +
-      "Confirm below that you have seen it. Nothing is recorded until you do.",
+      "Enter your name and confirm below. Nothing is recorded until you do.",
     true,
     token,
   );
@@ -69,8 +69,24 @@ export async function POST(request: Request) {
   // `||`, not `??`. A present-but-empty X-Forwarded-For is common behind some
   // proxies, and `??` only fires when the header is absent — so acknowledged_by
   // came out blank on the one field this route exists to record.
-  const by =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "link recipient";
+  // A typed name, not an IP. "203.0.113.44 acknowledged this" is not a record of
+  // a human taking responsibility, and who acknowledged an escalation is the
+  // whole point of the record. An attestation rather than an authentication —
+  // weaker than site SSO, which is the follow-up, and considerably better than
+  // an address. See docs/ONCALL.md D-E.
+  const typed = String(form?.get("by") ?? "").trim();
+  if (typed.length < 2) {
+    return page(
+      "Name required",
+      "Please enter your name so the record shows who acknowledged this. " +
+        "Nothing has been recorded.",
+      false,
+      token,
+      400,
+    );
+  }
+  const from = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const by = from ? `${typed} (${from})` : typed;
 
   const record = await getDeliveryStore().acknowledge(token, by);
   if (!record) {
@@ -104,10 +120,20 @@ function esc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function page(title: string, body: string, ok: boolean, confirmToken?: string): Response {
+function page(
+  title: string,
+  body: string,
+  ok: boolean,
+  confirmToken?: string,
+  status?: number,
+): Response {
   const form = confirmToken
-    ? `<form method="POST" style="margin-top:1.75rem">
+    ? `<form method="POST" style="margin-top:1.75rem;display:flex;flex-direction:column;gap:.75rem;max-width:22rem">
   <input type="hidden" name="t" value="${esc(confirmToken)}">
+  <label style="font-size:.85rem;color:#5f6368">Your name
+    <input name="by" required minlength="2" autocomplete="name"
+           style="display:block;width:100%;margin-top:.3rem;padding:.55rem .7rem;font-size:1rem;border:1px solid #dadce0;border-radius:6px">
+  </label>
   <button type="submit" style="background:#1a73e8;color:#fff;border:0;padding:.7rem 1.3rem;border-radius:6px;font-size:1rem;cursor:pointer">
     I have seen this escalation</button>
 </form>`
@@ -123,7 +149,10 @@ function page(title: string, body: string, ok: boolean, confirmToken?: string): 
   ${form}
 </div>`;
   return new Response(html, {
-    status: ok ? 200 : 404,
+    // 404 only means "we do not know this link". A missing name is a validation
+    // failure and the page re-renders the form, so answering 404 to it told the
+    // browser the wrong thing about a page it was showing.
+    status: status ?? (ok ? 200 : 404),
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
