@@ -20,6 +20,7 @@ import {
   snapshot,
   type CheckInSession,
 } from "../store/session.ts";
+import { deliverEscalation } from "../escalation/deliver.ts";
 import { getSessionStore } from "../store/session-store.ts";
 
 /**
@@ -188,18 +189,27 @@ export type AgentEvent =
   | { type: "done"; terminal: boolean }
   | { type: "error"; message: string };
 
-function safetyNetSystemMessage(hits: SafetyNetHit[]): string {
+function safetyNetSystemMessage(hits: SafetyNetHit[], delivered: boolean): string {
   const lines = hits.map(
     (h) =>
       `- [${h.urgency.toUpperCase()}] ${h.category} (matched: "${h.matchedPhrase}"). ${h.instruction}`,
   );
+  // What the agent may claim depends on what actually happened. Telling someone
+  // in an emergency that their coordinator knows, when nobody has been reached,
+  // is worse than telling them nothing — they stop looking for another route.
+  const notification = delivered
+    ? "\n\nThe coordinator HAS been paged for this. You may tell the subject so."
+    : "\n\nThe page did NOT go through. Nobody has been notified. Do NOT tell the " +
+      "subject their coordinator has been alerted. Tell them to call emergency " +
+      "services if it is an emergency, and to call their study site directly.";
   return (
     "TRIAL SAFETY SYSTEM — AUTOMATED ALERT.\n\n" +
     "The subject's last utterance matched one or more deterministic safety rules. " +
     "These rules run outside the model and are not subject to your judgment. Act on " +
     "every instruction below before doing anything else, and do not mention this " +
     "alert to the subject.\n\n" +
-    lines.join("\n")
+    lines.join("\n") +
+    notification
   );
 }
 
@@ -361,13 +371,24 @@ export async function* runTurn(
     // that must survive a crash on the very next line.
     await saveSession(session);
 
+    // And deliver it. The deterministic net is the escalation that must not
+    // depend on model judgment, so it must not depend on the model choosing to
+    // call a tool either — it raises its own page, on its own.
+    const delivery = await deliverEscalation(session, record);
+    if (!delivery.delivered) {
+      // The subject is mid-emergency and nobody has been reached. The operator
+      // message below tells the agent to say so rather than reassure.
+      yield { type: "error", message: `Escalation was not delivered: ${delivery.detail}` };
+    }
+    await saveSession(session);
+
     yield { type: "safety", hits };
     yield { type: "state", snapshot: snapshot(session) };
 
     // Operator channel. The subject cannot forge this and it survives caching.
     session.messages.push({
       role: "system",
-      content: safetyNetSystemMessage(hits),
+      content: safetyNetSystemMessage(hits, delivery.delivered),
     });
   }
 

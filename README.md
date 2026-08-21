@@ -411,6 +411,10 @@ Test identities: `001-0042` / `1958-03-11`, `001-0055` / `1971-11-02`, `002-0013
 |---|---|---|
 | `VOICE_AGENT_EFFORT` | `medium` | Reasoning effort — `low` for lowest latency, `high`+ for harder grading calls |
 | `VOICE_AGENT_FAST_MODE` | off | `1` enables Opus 5 fast mode (faster output, premium pricing) |
+| `RESEND_API_KEY` | — | Mail provider for escalation delivery. Absent means every escalation fails loudly |
+| `ESCALATION_EMAIL_FROM` | — | Sender on a Resend-verified domain, e.g. `escalations@example.com` |
+| `ESCALATION_EMAIL_TO` | — | Where escalations go. Absent is a delivery failure, not a default |
+| `VOICE_AGENT_PUBLIC_URL` | `VOICE_AGENT_URL` | Base URL used in acknowledgement links |
 | `VOICE_AGENT_SPIKE_LOG` | off | `1` writes raw request bodies to `.spike-logs` — whole conversations in plaintext. Dev only; refused in production |
 | `VOICE_AGENT_URL` | `http://localhost:3100` | Base URL the eval harness and warm script drive |
 | `ELEVENLABS_API_KEY` | unset | Enables the pinned neural voice; falls back to browser speech when absent |

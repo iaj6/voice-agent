@@ -127,6 +127,7 @@ describe(
         [
           "audit_entry",
           "check_in_session",
+          "escalation_delivery",
           "schema_migration",
           "session_key",
           "subject_state",

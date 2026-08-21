@@ -18,6 +18,7 @@ import {
   type SafetyScreenRecord,
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
+import { deliverEscalation } from "../escalation/deliver.ts";
 import { getKeyStore } from "../store/keys.ts";
 import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
 
@@ -1247,7 +1248,7 @@ const handlers: Record<string, Handler> = {
     };
   },
 
-  escalate_to_coordinator(session, input) {
+  async escalate_to_coordinator(session, input) {
     const urgency = String(input.urgency ?? "routine") as EscalationUrgency;
     const reasonText = String(input.reason ?? "");
 
@@ -1289,13 +1290,12 @@ const handlers: Record<string, Handler> = {
           // a call the protocol says must end.
           instruction:
             duplicate.urgency === "emergency"
-              ? "Already raised, and the coordinator is already paged. Tell the " +
-                "subject in one sentence to seek emergency care now, then call " +
-                "complete_check_in with ended_early true. Ask nothing further."
+              ? "Already raised for this event. Tell the subject in one sentence " +
+                "to seek emergency care now, then call complete_check_in with " +
+                "ended_early true. Ask nothing further."
               : duplicate.urgency === "urgent"
-                ? `Already raised — ${session.subject?.coordinatorName ?? "the coordinator"} ` +
-                  "has been paged. Do not raise it again. Continue the check-in if " +
-                  "it is safe to do so."
+                ? "Already raised for this event. Do not raise it again. Continue " +
+                  "the check-in if it is safe to do so."
                 : "Already flagged for routine review. Continue the check-in.",
         },
       };
@@ -1327,22 +1327,54 @@ const handlers: Record<string, Handler> = {
     });
 
     const coordinator = session.subject?.coordinatorName ?? "the study coordinator";
+
+    // Delivered before this returns, so the next thing the agent says is true.
+    // The system used to report `notified: coordinator` and have the agent tell
+    // the participant their coordinator had been alerted, while nothing had been
+    // sent anywhere — the one place it said something untrue to a sick person.
+    const outcome = await deliverEscalation(session, record);
+
     return {
       result: {
         escalation_id: record.id,
         urgency,
-        notified: coordinator,
-        instruction:
-          urgency === "emergency"
-            ? "Coordinator paged. Tell the subject in one sentence to seek " +
-              "emergency care now and that their coordinator has been alerted. Then " +
-              "call complete_check_in with ended_early true. Ask nothing further."
+        delivered: outcome.delivered,
+        notified: outcome.delivered ? coordinator : null,
+        // Why it failed, in the tool result rather than only in the audit trail.
+        // Audit values are sealed wholesale, so after a subject is shredded the
+        // operational reason a page failed becomes unreadable along with the
+        // clinical content — a coarseness worth knowing about. This detail is
+        // about the mail transport, not the participant.
+        delivery_error: outcome.detail,
+        acknowledge_by: outcome.delivery?.deadlineAt ?? null,
+        instruction: outcome.delivered
+          ? urgency === "emergency"
+            ? `${coordinator} has been paged. Tell the subject in one sentence to ` +
+              "seek emergency care now and that their coordinator has been alerted. " +
+              "Then call complete_check_in with ended_early true. Ask nothing further."
             : urgency === "urgent"
               ? `${coordinator} has been paged and will call today. Tell the subject ` +
                 "a coordinator will reach out, then continue the check-in if it is " +
                 "safe to do so."
-              : "Flagged for routine review. Continue the check-in.",
+              : "Flagged for routine review. Continue the check-in."
+          : // Nothing reached anyone. Say what is true and hand the subject a
+            // route that does not depend on this system working.
+            urgency === "emergency"
+            ? "The page did NOT go through. Do not tell the subject their " +
+              "coordinator has been alerted — that is not true. Tell them in one " +
+              "sentence to call 911 now, and to call their study site directly " +
+              "afterwards. Then call complete_check_in with ended_early true."
+            : urgency === "urgent"
+              ? "The page did NOT go through. Do not say a coordinator has been " +
+                "notified. Tell the subject to call their study site directly " +
+                "today, and give no reassurance that anyone already knows. Then " +
+                "continue the check-in if it is safe to do so."
+              : "Recorded, but the notification did not send. Do not tell the " +
+                "subject anyone has been informed. Continue the check-in.",
       },
+      // An escalation nobody received is an error condition, and the model
+      // should see it as one rather than as a successful call.
+      isError: !outcome.delivered,
     };
   },
 
