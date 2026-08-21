@@ -8,6 +8,7 @@
     "start": "next start -p 3100",
     "lint": "eslint",
     "test": "node --test --env-file-if-exists=.env.local --import ./tests/helpers/isolate-db.ts \"tests/*.test.ts\"",
+    "sweep": "node scripts/sweep.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:verify-replay": "node scripts/db-verify-replay.mjs",
     "warm-speech": "node scripts/warm-speech.mjs",

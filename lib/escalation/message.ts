@@ -49,17 +49,38 @@ export interface EscalationNotice {
   raisedAt: string;
   ackUrl: string;
   deadline: Date;
+  /** Which rung this is, so the subject line says so. */
+  tier?: "primary" | "secondary" | "alarm";
 }
 
 export function composeEscalation(notice: EscalationNotice): Omit<EscalationMessage, "to"> {
+  // The rung is in the subject line because a secondary contact needs to know
+  // at a glance that they are the backup and the primary did not respond — that
+  // is the whole information content of the second message.
+  const prefix =
+    notice.tier === "alarm"
+      ? "UNACKNOWLEDGED"
+      : notice.tier === "secondary"
+        ? "ESCALATED — no response"
+        : notice.urgency.toUpperCase();
   const subject =
-    `[${PROTOCOL.protocolId}] ${notice.urgency.toUpperCase()} — ` +
+    `[${PROTOCOL.protocolId}] ${prefix} — ` +
     `subject ${notice.subjectId ?? "unidentified"} (${notice.escalationId})`;
 
   const respondBy = notice.deadline.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 
+  const ladder =
+    notice.tier === "alarm"
+      ? "NOBODY HAS ACKNOWLEDGED THIS. The primary and backup contacts were both " +
+        "paged and the response window has closed on both."
+      : notice.tier === "secondary"
+        ? "You are the backup contact. The primary contact did not acknowledge " +
+          "this within the response window."
+        : null;
+
   const lines = [
     URGENCY_LABEL[notice.urgency],
+    ...(ladder ? ["", ladder] : []),
     "",
     `Protocol:    ${PROTOCOL.protocolId} — ${PROTOCOL.shortTitle}`,
     `Subject:     ${notice.subjectId ?? "not yet verified"}`,
@@ -82,8 +103,9 @@ export function composeEscalation(notice: EscalationNotice): Omit<EscalationMess
   ];
 
   const html = `<div style="font-family:ui-monospace,Menlo,monospace;font-size:14px;line-height:1.6">
-<p style="font-weight:700;color:${notice.urgency === "emergency" ? "#b3261e" : notice.urgency === "urgent" ? "#8a5300" : "#3c4043"}">
+<p style="font-weight:700;color:${notice.tier && notice.tier !== "primary" ? "#b3261e" : notice.urgency === "emergency" ? "#b3261e" : notice.urgency === "urgent" ? "#8a5300" : "#3c4043"}">
 ${escapeHtml(URGENCY_LABEL[notice.urgency])}</p>
+${ladder ? `<p style="font-weight:700;color:#b3261e">${escapeHtml(ladder)}</p>` : ""}
 <table cellpadding="0" cellspacing="0" style="border-collapse:collapse">
 ${row("Protocol", `${PROTOCOL.protocolId} — ${PROTOCOL.shortTitle}`)}
 ${row("Subject", notice.subjectId ?? "not yet verified")}

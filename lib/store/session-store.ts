@@ -50,6 +50,16 @@ export interface SessionStore {
    * so silence on an open line is not mistaken for absence.
    */
   touch(id: string): Promise<void>;
+  /**
+   * Appends audit entries to a record without touching the record itself.
+   *
+   * Deliberately not blocked by the completion lock. A coordinator failing to
+   * acknowledge an escalation is a fact about a call that arrives *after* the
+   * call ends, and a trail that cannot accept it is a trail that stops being the
+   * history of the record at the moment the record becomes interesting. The
+   * table is append-only, so this can add and never rewrite.
+   */
+  appendAudit(session: CheckInSession): Promise<void>;
 }
 
 /** How long after a drop a redial still counts as the same check-in. */
@@ -349,6 +359,20 @@ class MemorySessionStore implements SessionStore {
     if (stored && stored.completedAt === null) {
       stored.updatedAt = new Date().toISOString();
     }
+  }
+
+  async appendAudit(session: CheckInSession): Promise<void> {
+    const stored = this.sessions.get(session.id);
+    if (!stored) return;
+    const known = new Set(stored.audit.all().map((e) => e.seq));
+    const merged = [
+      ...stored.audit.all().map((e) => ({ ...e })),
+      ...session.audit.all().filter((e) => !known.has(e.seq)).map((e) => ({ ...e })),
+    ];
+    this.sessions.set(session.id, {
+      ...stored,
+      audit: AuditTrail.rehydrate(session.id, merged),
+    });
   }
 
   /** See __backdateForTest. */
@@ -659,7 +683,7 @@ class PostgresSessionStore implements SessionStore {
   }
 
   /** Inserts only entries not already persisted. The table rejects rewrites. */
-  private async appendAudit(session: CheckInSession): Promise<void> {
+  async appendAudit(session: CheckInSession): Promise<void> {
     const sql = getDb();
     const [{ high }] = (await sql`
       select coalesce(max(seq), 0) as high from audit_entry

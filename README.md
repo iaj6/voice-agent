@@ -414,6 +414,9 @@ Test identities: `001-0042` / `1958-03-11`, `001-0055` / `1971-11-02`, `002-0013
 | `RESEND_API_KEY` | — | Mail provider for escalation delivery. Absent means every escalation fails loudly |
 | `ESCALATION_EMAIL_FROM` | — | Sender on a Resend-verified domain, e.g. `escalations@example.com` |
 | `ESCALATION_EMAIL_TO` | — | Where escalations go. Absent is a delivery failure, not a default |
+| `ESCALATION_EMAIL_SECONDARY` | — | Backup contact, paged when the primary lets the response window close |
+| `ESCALATION_EMAIL_ALARM` | primary | Where the alarm goes when the ladder runs out |
+| `ESCALATION_SWEEP_SECRET` | — | Bearer token for `POST /api/escalation/sweep`. Unset means the endpoint refuses to run |
 | `VOICE_AGENT_PUBLIC_URL` | `VOICE_AGENT_URL` | Base URL used in acknowledgement links |
 | `VOICE_AGENT_SPIKE_LOG` | off | `1` writes raw request bodies to `.spike-logs` — whole conversations in plaintext. Dev only; refused in production |
 | `VOICE_AGENT_URL` | `http://localhost:3100` | Base URL the eval harness and warm script drive |

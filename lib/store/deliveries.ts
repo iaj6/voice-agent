@@ -12,6 +12,15 @@ import type { EscalationUrgency } from "../clinical/safety.ts";
 
 export type DeliveryStatus = "queued" | "sent" | "failed" | "acknowledged";
 
+/**
+ * Which rung of the escalation ladder a delivery is.
+ *
+ * A retry is the same rung again. A secondary is the same escalation reaching a
+ * different person because the first did not respond. An alarm is neither: it is
+ * the system reporting that the ladder ran out.
+ */
+export type DeliveryTier = "primary" | "secondary" | "alarm";
+
 export interface DeliveryRecord {
   id: string;
   sessionId: string;
@@ -21,6 +30,7 @@ export interface DeliveryRecord {
   channel: string;
   destination: string;
   attempt: number;
+  tier: DeliveryTier;
   status: DeliveryStatus;
   providerId: string | null;
   error: string | null;
@@ -37,6 +47,7 @@ export interface NewDelivery {
   channel: string;
   destination: string;
   attempt: number;
+  tier: DeliveryTier;
   deadlineAt: Date;
 }
 
@@ -62,6 +73,8 @@ export interface DeliveryStore {
   /** Sent, unacknowledged, past deadline. The alarm list. */
   overdue(now?: Date): Promise<DeliveryRecord[]>;
   attemptsFor(sessionId: string, escalationId: string): Promise<number>;
+  /** Everything still in flight: unacknowledged, whatever rung it is on. */
+  openLadder(): Promise<DeliveryRecord[]>;
 }
 
 function rowToRecord(row: Record<string, unknown>): DeliveryRecord {
@@ -74,6 +87,7 @@ function rowToRecord(row: Record<string, unknown>): DeliveryRecord {
     channel: String(row.channel),
     destination: String(row.destination),
     attempt: Number(row.attempt),
+    tier: (row.tier as DeliveryTier) ?? "primary",
     status: row.status as DeliveryStatus,
     providerId: (row.provider_id as string | null) ?? null,
     error: (row.error as string | null) ?? null,
@@ -168,6 +182,17 @@ class MemoryDeliveryStore implements DeliveryStore {
       (r) => r.sessionId === sessionId && r.escalationId === escalationId,
     ).length;
   }
+
+  async openLadder(): Promise<DeliveryRecord[]> {
+    const acknowledged = new Set(
+      [...this.rows.values()]
+        .filter((r) => r.acknowledgedAt !== null)
+        .map((r) => `${r.sessionId}:${r.escalationId}`),
+    );
+    return [...this.rows.values()]
+      .filter((r) => !acknowledged.has(`${r.sessionId}:${r.escalationId}`))
+      .map((r) => ({ ...r }));
+  }
 }
 
 class PostgresDeliveryStore implements DeliveryStore {
@@ -179,10 +204,11 @@ class PostgresDeliveryStore implements DeliveryStore {
     const rows = (await sql`
       insert into escalation_delivery
         (id, session_id, escalation_id, subject_id, urgency, channel, destination,
-         attempt, status, ack_token_hash, deadline_at)
+         attempt, tier, status, ack_token_hash, deadline_at)
       values (${id}, ${input.sessionId}, ${input.escalationId}, ${input.subjectId},
               ${input.urgency}, ${input.channel}, ${input.destination},
-              ${input.attempt}, 'queued', ${hashToken(ackToken)}, ${input.deadlineAt.toISOString()})
+              ${input.attempt}, ${input.tier}, 'queued', ${hashToken(ackToken)},
+              ${input.deadlineAt.toISOString()})
       returning *`) as Record<string, unknown>[];
     return rowToRecord(rows[0]);
   }
@@ -245,6 +271,23 @@ class PostgresDeliveryStore implements DeliveryStore {
        where acknowledged_at is null and status <> 'failed'
          and deadline_at < ${now.toISOString()}
        order by deadline_at`) as Record<string, unknown>[];
+    return rows.map(rowToRecord);
+  }
+
+  async openLadder(): Promise<DeliveryRecord[]> {
+    const sql = getDb();
+    // Every row for any escalation that nobody has acknowledged. Whole
+    // escalations, not individual rows: the sweeper decides the next rung from
+    // what has already been tried, so it needs the history, and one
+    // acknowledgement anywhere retires the whole ladder.
+    const rows = (await sql`
+      select d.* from escalation_delivery d
+       where not exists (
+         select 1 from escalation_delivery a
+          where a.session_id = d.session_id
+            and a.escalation_id = d.escalation_id
+            and a.acknowledged_at is not null)
+       order by d.created_at`) as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }
 

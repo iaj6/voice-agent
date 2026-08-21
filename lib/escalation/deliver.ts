@@ -17,6 +17,7 @@ import {
   getDeliveryStore,
   newAckToken,
   type DeliveryRecord,
+  type DeliveryTier,
 } from "../store/deliveries.ts";
 import { composeEscalation } from "./message.ts";
 import { ackDeadline } from "./sla.ts";
@@ -77,9 +78,28 @@ function ackBaseUrl(): string | null {
   return process.env.NODE_ENV === "production" ? null : "http://localhost:3100";
 }
 
+export interface DeliveryOptions {
+  /** Which rung of the ladder this is. Defaults to the first. */
+  tier?: DeliveryTier;
+  /** Overrides the recipient, for a secondary contact or an alarm. */
+  to?: string | null;
+  /**
+   * The clock this delivery is stamped against.
+   *
+   * One clock per pass. The sweeper decides whether a window has closed against
+   * a time it is given, while the deadline here was computed from Date.now() —
+   * so a backup contact paged during a sweep was handed a deadline in a
+   * different frame from the one that would judge it, and its window could lapse
+   * the instant it was created. The same two-clock mistake as reading a database
+   * timestamp against an application clock.
+   */
+  now?: Date;
+}
+
 export async function deliverEscalation(
   session: CheckInSession,
   escalation: EscalationRecord,
+  options: DeliveryOptions = {},
 ): Promise<DeliveryOutcome> {
   // Everything is inside the guard, not just the send.
   //
@@ -89,7 +109,7 @@ export async function deliverEscalation(
   // has no catch — the whole turn aborted mid-emergency. "Never silent" has to
   // survive the parts that are not the network.
   try {
-    return await attemptDelivery(session, escalation);
+    return await attemptDelivery(session, escalation, options);
   } catch (err) {
     return fail(
       session,
@@ -105,10 +125,12 @@ export async function deliverEscalation(
 async function attemptDelivery(
   session: CheckInSession,
   escalation: EscalationRecord,
+  options: DeliveryOptions,
 ): Promise<DeliveryOutcome> {
   const store = getDeliveryStore();
   const transport = getTransport();
-  const to = escalationRecipient();
+  const tier = options.tier ?? "primary";
+  const to = options.to !== undefined ? options.to : escalationRecipient();
   const link = ackBaseUrl();
   const attempt = (await store.attemptsFor(session.id, escalation.id)) + 1;
 
@@ -139,7 +161,7 @@ async function attemptDelivery(
   }
 
   const token = newAckToken();
-  const deadline = ackDeadline(escalation.urgency);
+  const deadline = ackDeadline(escalation.urgency, (options.now ?? new Date()).getTime());
   const delivery = await store.queue(
     {
       sessionId: session.id,
@@ -149,6 +171,7 @@ async function attemptDelivery(
       channel: transport.channel,
       destination: to,
       attempt,
+      tier,
       deadlineAt: deadline,
     },
     token,
@@ -158,6 +181,7 @@ async function attemptDelivery(
     escalationId: escalation.id,
     urgency: escalation.urgency,
     summary: safeSummary(session, escalation),
+    tier,
     subjectId: session.subject?.subjectId ?? null,
     coordinatorName: session.subject?.coordinatorName ?? null,
     siteName: session.subject?.siteName ?? null,
@@ -253,6 +277,7 @@ async function fail(
           channel,
           destination,
           attempt: Math.max(attempt, 1),
+          tier: "primary",
           deadlineAt: ackDeadline(escalation.urgency),
         },
         newAckToken(),
