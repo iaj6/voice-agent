@@ -14,12 +14,46 @@
 import { getDb, isDatabaseConfigured } from "./db.ts";
 import { KEY_BYTES, newKey } from "./seal.ts";
 
+/**
+ * Why a key is unavailable, which decides what the caller may do next.
+ *
+ * "destroyed" means a retention rule was applied and nothing further may be
+ * written. "absent" means no key was ever minted — a session created before
+ * sealing existed. Collapsing the two meant every pre-deploy session became
+ * unwritable with an error announcing a destruction that never happened.
+ */
+export type KeyState = "live" | "destroyed" | "absent";
+
+/** A key that was deliberately destroyed. Distinct from one that never existed. */
+export class KeyDestroyedError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(
+      `Session ${sessionId} was shredded under a retention rule: its key has been ` +
+        "destroyed and nothing further can be written to it.",
+    );
+    this.sessionId = sessionId;
+  }
+}
+
 export interface KeyStore {
   readonly kind: "memory" | "postgres";
   /** Mints the key for a new session. */
   create(sessionId: string): Promise<Buffer>;
   /** The key, or null if it has been destroyed or never existed. */
   get(sessionId: string): Promise<Buffer | null>;
+  /** Which of the two "no key" cases this is. */
+  state(sessionId: string): Promise<KeyState>;
+  /**
+   * The key to seal with, minting one if this session predates sealing.
+   *
+   * Throws only when the key was destroyed. A session with no key yet gets one,
+   * so content written from now on is shreddable even though whatever was
+   * written before this deploy is not — that history cannot be re-sealed,
+   * because audit_entry rejects UPDATE and re-hashing would break the chain.
+   */
+  ensureWritable(sessionId: string): Promise<Buffer>;
   /** Records who this session turned out to be, once verification succeeds. */
   bindSubject(sessionId: string, subjectId: string): Promise<void>;
   /** Destroys every key for a subject. Returns how many. */
@@ -40,6 +74,19 @@ class MemoryKeyStore implements KeyStore {
 
   async get(sessionId: string): Promise<Buffer | null> {
     return this.keys.get(sessionId)?.key ?? null;
+  }
+
+  async state(sessionId: string): Promise<KeyState> {
+    const row = this.keys.get(sessionId);
+    if (!row) return "absent";
+    return row.key ? "live" : "destroyed";
+  }
+
+  async ensureWritable(sessionId: string): Promise<Buffer> {
+    const state = await this.state(sessionId);
+    if (state === "destroyed") throw new KeyDestroyedError(sessionId);
+    const existing = await this.get(sessionId);
+    return existing ?? (await this.create(sessionId));
   }
 
   async bindSubject(sessionId: string, subjectId: string): Promise<void> {
@@ -75,8 +122,34 @@ class PostgresKeyStore implements KeyStore {
     await sql`
       insert into session_key (session_id, key) values (${sessionId}, ${key})
       on conflict (session_id) do nothing`;
-    // A conflict means this session already has one; use it rather than a second.
-    return (await this.get(sessionId)) ?? key;
+
+    // A conflict means this session already has a key; use it rather than a
+    // second one. If it has a *destroyed* key, returning the freshly minted one
+    // would seal content under a key that was never stored — unreadable by
+    // everyone, including the legitimate reader, and indistinguishable from
+    // shredded on the next load.
+    const stored = await this.get(sessionId);
+    if (stored) return stored;
+    if ((await this.state(sessionId)) === "destroyed") {
+      throw new KeyDestroyedError(sessionId);
+    }
+    return key;
+  }
+
+  async state(sessionId: string): Promise<KeyState> {
+    const sql = getDb();
+    const rows = (await sql`
+      select (key is not null) as live from session_key
+       where session_id = ${sessionId}`) as { live: boolean }[];
+    if (rows.length === 0) return "absent";
+    return rows[0].live ? "live" : "destroyed";
+  }
+
+  async ensureWritable(sessionId: string): Promise<Buffer> {
+    const state = await this.state(sessionId);
+    if (state === "destroyed") throw new KeyDestroyedError(sessionId);
+    if (state === "absent") return this.create(sessionId);
+    return (await this.get(sessionId))!;
   }
 
   async get(sessionId: string): Promise<Buffer | null> {
@@ -92,7 +165,7 @@ class PostgresKeyStore implements KeyStore {
     // to garbage rather than fail, so the length is checked, not assumed.
     const key =
       typeof raw === "string"
-        ? Buffer.from(raw.replace(/^\\\\x/, ""), "hex")
+        ? Buffer.from(raw.replace(/^\\x/, ""), "hex")
         : Buffer.from(raw);
     if (key.length !== KEY_BYTES) {
       throw new Error(

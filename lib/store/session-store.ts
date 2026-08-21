@@ -127,31 +127,37 @@ function sealRecord(record: StoredRecord, keyId: string, key: Buffer): StoredRec
 
 /** Inverse of sealRecord. Shredded fields come back as a marker, never a throw. */
 function unsealRecord(record: StoredRecord, key: Buffer | null): StoredRecord {
-  const u = (v: unknown) => (isSealed(v) ? unsealOrMark(v as SealedValue, key) : v);
+  // `shape` tells the marker what it is standing in for: an emptied array where
+  // an array was, "[destroyed]" where a string was. A single object marker
+  // returned for every field is what made `[...prior.subjectUtterances]` throw
+  // on the resume path, in code whose contract is that reading a shredded record
+  // must not throw.
+  const u = (v: unknown, shape: unknown = null) =>
+    isSealed(v) ? unsealOrMark(v as SealedValue, key, shape) : v;
   return {
     ...record,
     subject: (u(record.subject) ?? null) as never,
-    subjectUtterances: (u(record.subjectUtterances) ?? []) as never,
-    refusedQuotes: (u(record.refusedQuotes) ?? []) as never,
+    subjectUtterances: (u(record.subjectUtterances, []) ?? []) as never,
+    refusedQuotes: (u(record.refusedQuotes, []) ?? []) as never,
     adverseEvents: (record.adverseEvents ?? []).map((e) => ({
       ...e,
-      verbatimTerm: u(e.verbatimTerm) as never,
-      onsetDescription: u(e.onsetDescription) as never,
+      verbatimTerm: u(e.verbatimTerm, "") as never,
+      onsetDescription: u(e.onsetDescription, "") as never,
     })),
     conMeds: (record.conMeds ?? []).map((m) => ({
       ...m,
-      indicationVerbatim: u(m.indicationVerbatim) as never,
-      startedDescription: u(m.startedDescription) as never,
+      indicationVerbatim: u(m.indicationVerbatim, "") as never,
+      startedDescription: u(m.startedDescription, "") as never,
     })),
     adherence: record.adherence
-      ? { ...record.adherence, reasonVerbatim: u(record.adherence.reasonVerbatim) as never }
+      ? { ...record.adherence, reasonVerbatim: u(record.adherence.reasonVerbatim, "") as never }
       : null,
     safetyScreen: record.safetyScreen
       ? {
           ...record.safetyScreen,
           items: (record.safetyScreen.items ?? []).map((i) => ({
             ...i,
-            verbatim: u(i.verbatim) as never,
+            verbatim: u(i.verbatim, "") as never,
           })),
         }
       : null,
@@ -196,6 +202,7 @@ function blankSession(id: string): CheckInSession {
     solicitedReviewed: [],
     summary: null,
     completedAt: null,
+    shredded: false,
     audit: new AuditTrail(id),
   };
 }
@@ -226,11 +233,33 @@ function openingEntry(session: CheckInSession) {
  * A store that copies on the way in and out has the same semantics as Postgres,
  * so tests written against it mean what they appear to mean.
  */
-function detach(session: CheckInSession): CheckInSession {
+/**
+ * Rehydrates a trail and re-arms sealing on it.
+ *
+ * A session loaded mid-call goes on recording entries. Without re-arming, every
+ * entry written after a reload would be plaintext while the ones before it were
+ * sealed — the record would be half-shreddable, and nothing would say which half.
+ */
+function rehydrateSealed(
+  sessionId: string,
+  key: Buffer | null,
+  entries: AuditEntry[],
+): AuditTrail {
+  const trail = AuditTrail.rehydrate(sessionId, entries);
+  if (key) trail.sealWith(sessionId, key);
+  return trail;
+}
+
+function detach(session: CheckInSession, key: Buffer | null = null): CheckInSession {
   const entries = [...session.audit.all()].map((e) => ({ ...e }));
   return {
     ...structuredClone({ ...session, audit: undefined }),
-    audit: AuditTrail.rehydrate(session.id, entries),
+    // Re-armed, like the Postgres store's rehydrateSealed. Without it every
+    // audit entry written after the first load was plaintext while the ones
+    // before it were sealed — the record half-shreddable, with nothing saying
+    // which half. The comment on create() claimed this store behaved "exactly
+    // as the Postgres store does"; it did not.
+    audit: rehydrateSealed(session.id, key, entries),
   } as CheckInSession;
 }
 
@@ -246,13 +275,14 @@ class MemorySessionStore implements SessionStore {
     const key = await getKeyStore().create(session.id);
     session.audit.sealWith(session.id, key);
     openingEntry(session);
-    this.sessions.set(session.id, detach(session));
+    this.sessions.set(session.id, detach(session, key));
     return session;
   }
 
   async get(id: string): Promise<CheckInSession | null> {
     const stored = this.sessions.get(id);
-    return stored ? detach(stored) : null;
+    if (!stored) return null;
+    return detach(stored, await getKeyStore().get(id));
   }
 
   async save(session: CheckInSession): Promise<void> {
@@ -263,8 +293,12 @@ class MemorySessionStore implements SessionStore {
           "still in progress. Writes since then were not saved.",
       );
     }
+    const key = await getKeyStore().ensureWritable(session.id);
+    if (session.subject) {
+      await getKeyStore().bindSubject(session.id, session.subject.subjectId);
+    }
     session.updatedAt = new Date().toISOString();
-    this.sessions.set(session.id, detach(session));
+    this.sessions.set(session.id, detach(session, key));
   }
 
   async claimResumable(
@@ -290,7 +324,7 @@ class MemorySessionStore implements SessionStore {
     if (!candidate) return null;
     // Touching it is the lease: a concurrent claimer now sees it as live.
     candidate.updatedAt = new Date().toISOString();
-    return detach(candidate);
+    return detach(candidate, await getKeyStore().get(candidate.id));
   }
 
   async supersede(session: CheckInSession, successorId: string): Promise<void> {
@@ -376,22 +410,6 @@ export function __resetSchemaVersionCache(): void {
  * it a provenance stamp would suggest otherwise.
  */
 
-/**
- * Rehydrates a trail and re-arms sealing on it.
- *
- * A session loaded mid-call goes on recording entries. Without re-arming, every
- * entry written after a reload would be plaintext while the ones before it were
- * sealed — the record would be half-shreddable, and nothing would say which half.
- */
-function rehydrateSealed(
-  sessionId: string,
-  key: Buffer | null,
-  entries: AuditEntry[],
-): AuditTrail {
-  const trail = AuditTrail.rehydrate(sessionId, entries);
-  if (key) trail.sealWith(sessionId, key);
-  return trail;
-}
 
 class PostgresSessionStore implements SessionStore {
   readonly kind = "postgres" as const;
@@ -438,7 +456,7 @@ class PostgresSessionStore implements SessionStore {
     const record = unsealRecord(row.record as StoredRecord, key);
     const rawMessages = row.messages ?? [];
     const messages = (
-      isSealed(rawMessages) ? (unsealOrMark(rawMessages, key) ?? []) : rawMessages
+      isSealed(rawMessages) ? (unsealOrMark(rawMessages, key, []) ?? []) : rawMessages
     ) as CheckInSession["messages"];
 
     return {
@@ -465,6 +483,7 @@ class PostgresSessionStore implements SessionStore {
       completedAt: row.completed_at
         ? new Date(row.completed_at as string).toISOString()
         : null,
+      shredded: key === null && (await getKeyStore().state(id)) === "destroyed",
       audit: rehydrateSealed(
         id,
         key,
@@ -533,16 +552,11 @@ class PostgresSessionStore implements SessionStore {
       );
     }
 
-    const key = await getKeyStore().get(session.id);
-    if (!key) {
-      // The key is gone, so this record has been destroyed under a retention
-      // rule. Writing plaintext into it now would undo that silently, which is
-      // worse than failing the turn.
-      throw new Error(
-        `Session ${session.id} has been shredded; its key no longer exists and ` +
-          "nothing further can be written to it.",
-      );
-    }
+    // Throws only if the key was *destroyed*. A session with no key at all
+    // predates sealing and gets one now — otherwise every row written before
+    // this deploy became unwritable, with an error announcing a destruction
+    // that never happened.
+    const key = await getKeyStore().ensureWritable(session.id);
 
     await sql`
       update check_in_session
@@ -603,6 +617,11 @@ class PostgresSessionStore implements SessionStore {
 
   async supersede(session: CheckInSession, successorId: string): Promise<void> {
     const sql = getDb();
+    // save() refuses to write to a shredded session; this path appends audit
+    // entries and did not. Those entries would land as plaintext — the trail is
+    // unarmed once the key is gone — in a table that rejects DELETE, so nothing
+    // in this design could ever destroy them.
+    await getKeyStore().ensureWritable(session.id);
     const summary =
       (session.summary ?? "") +
       ` [Interrupted; record carried forward into session ${successorId}.]`;

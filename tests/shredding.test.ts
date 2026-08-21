@@ -133,16 +133,19 @@ describe(
       assert.equal(rows.length, 1, "the record vanished; it should still prove it existed");
 
       const reloaded = (await getSessionStore().get(session.id))!;
+      assert.equal(reloaded.shredded, true, "the record does not say it was destroyed");
       assert.deepEqual(
         reloaded.subjectUtterances,
-        { __shredded: true },
+        [],
         "content survived the destruction of its key",
       );
-      assert.deepEqual(
-        reloaded.adverseEvents[0].verbatimTerm as unknown,
-        { __shredded: true },
+      assert.equal(
+        reloaded.adverseEvents[0].verbatimTerm,
+        "[destroyed]",
         "the verbatim term survived",
       );
+      // Shaped like what it replaced, so nothing downstream throws on it.
+      assert.doesNotThrow(() => [...reloaded.subjectUtterances]);
       // Grade and coded term are structured, not personal, and stay.
       assert.equal(reloaded.adverseEvents[0].grade, 2);
     });
@@ -190,6 +193,72 @@ describe(
       );
     });
 
+    test("a session that predates sealing is still writable", async () => {
+      // Migration 0003 created session_key empty, so every row written before
+      // that deploy has no key. Treating "no key" as "shredded" made all of them
+      // unwritable — a call in flight at deploy time would fail on its next
+      // write, with an error announcing a destruction that never happened.
+      const store = getSessionStore();
+      const session = await store.create();
+      await raw!.query(`delete from session_key where session_id = $1`, [session.id]);
+
+      session.subjectUtterances = [...SPOKEN];
+      await executeTool(session, "verify_subject", VERIFY);
+      await store.save(session);
+
+      const rows = await raw!.query(
+        `select key is not null as live from session_key where session_id = $1`,
+        [session.id],
+      );
+      assert.equal(rows[0]?.live, true, "no key was minted for a legacy session");
+    });
+
+    test("a withdrawal refusal still binds the key it sealed under", async () => {
+      // The refusal returns before session.subject is set, so nothing bound the
+      // key to the subject — and shredSubject finds keys by subject_id. The
+      // session still holds the spoken subject ID and date of birth, so the
+      // participant most likely to ask for erasure was the one the shredder
+      // silently skipped.
+      const { getSubjectStore } = await import("../lib/store/subjects.ts");
+      await getSubjectStore().withdraw("001-0055", "Dana Whitfield, RN", "");
+
+      const store = getSessionStore();
+      const session = await store.create();
+      session.subjectUtterances = ["001-0055", "November 2nd, 1971"];
+      const out = await executeTool(session, "verify_subject", {
+        subject_id: "001-0055",
+        date_of_birth: "1971-11-02",
+      });
+      assert.equal(out.isError, true, "a withdrawn participant was verified");
+
+      const bound = await raw!.query(
+        `select subject_id from session_key where session_id = $1`,
+        [session.id],
+      );
+      assert.equal(
+        bound[0]?.subject_id,
+        "001-0055",
+        "the key is unbound, so subject-level shredding will never reach it",
+      );
+
+      const destroyed = await getKeyStore().shredSubject("001-0055", "Erasure request.");
+      assert.ok(destroyed > 0, "shredSubject skipped the refused call entirely");
+    });
+
+    test("nothing can be appended to a shredded record, including on supersede", async () => {
+      const store = getSessionStore();
+      const session = await recordedCall();
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Retention elapsed.");
+
+      // save() already refused; supersede() appends audit entries by a different
+      // path, and those would land as plaintext in a table that rejects DELETE.
+      await assert.rejects(
+        () => store.supersede(session, "00000000-0000-0000-0000-0000000000ff"),
+        /shredded/,
+        "a shredded record gained audit entries that can never be destroyed",
+      );
+    });
+
     test("one subject's destruction does not touch another's", async () => {
       const other = { subject_id: "001-0055", date_of_birth: "1971-11-02" };
       const store = getSessionStore();
@@ -204,7 +273,8 @@ describe(
 
       const shredded = (await store.get(mine.id))!;
       const intact = (await store.get(theirs.id))!;
-      assert.deepEqual(shredded.subjectUtterances, { __shredded: true });
+      assert.equal(shredded.shredded, true);
+      assert.deepEqual(shredded.subjectUtterances, []);
       assert.deepEqual(
         intact.subjectUtterances,
         ["I've had a headache"],

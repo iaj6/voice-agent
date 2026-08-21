@@ -18,7 +18,8 @@ import {
   type SafetyScreenRecord,
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
-import { getSubjectStore } from "../store/subjects.ts";
+import { getKeyStore } from "../store/keys.ts";
+import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -474,6 +475,24 @@ async function resumeDroppedCall(
   const prior = await store.claimResumable(subjectId, session.id);
   if (!prior) return null;
 
+  // A shredded record has nothing to carry. Its free text came back as empty
+  // arrays and "[destroyed]" placeholders so that reading it does not throw, and
+  // carrying those forward would put a placeholder into a live eCRF and offer it
+  // to the provenance gate as though the subject had said it.
+  if (prior.shredded) {
+    session.audit.record({
+      actor: "system",
+      action: "RESUME_DECLINED_SHREDDED",
+      entity: "CheckInSession",
+      entityId: prior.id,
+      after: { from: prior.id },
+      reason:
+        "An earlier call for this subject was found, but its content has been " +
+        "destroyed under a retention rule. Nothing was carried forward.",
+    });
+    return null;
+  }
+
   // Deep copies. Sharing structure with a record that is about to be closed let
   // later writes mutate the closed one — an emergency-tier screen answer once
   // appeared inside a locked session with no matching audit entry, so the record
@@ -696,7 +715,14 @@ const handlers: Record<string, Handler> = {
     // and nothing else, which is the correct record of a call that should not
     // have happened.
     const state = await getSubjectStore().get(subject.subjectId);
-    if (state?.withdrawnAt) {
+    if (isWithdrawn(state)) {
+      // Bind the key even though verification is being refused. This session
+      // still holds the subject's spoken ID and date of birth, sealed — and
+      // shredSubject() finds keys by subject_id, so leaving it unbound would
+      // make the participant most likely to ask for erasure the one whose data
+      // the shredder silently skips.
+      await getKeyStore().bindSubject(session.id, subject.subjectId);
+
       session.audit.record({
         actor: "system",
         action: "WITHDRAWN_SUBJECT_REFUSED",
@@ -704,8 +730,8 @@ const handlers: Record<string, Handler> = {
         entityId: session.id,
         after: {
           subjectId: subject.subjectId,
-          withdrawnAt: state.withdrawnAt,
-          withdrawnBy: state.withdrawnBy,
+          withdrawnAt: state?.withdrawnAt,
+          withdrawnBy: state?.withdrawnBy,
         },
         reason:
           "This participant has withdrawn from the study. The check-in was ended " +

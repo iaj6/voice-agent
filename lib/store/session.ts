@@ -116,6 +116,16 @@ export interface CheckInSession {
   solicitedReviewed: string[];
   summary: string | null;
   completedAt: string | null;
+  /**
+   * True when this record's key has been destroyed under a retention rule.
+   *
+   * Stated rather than inferred. Shredded free text comes back shaped like what
+   * it replaced — an emptied array where an array was — so that nothing
+   * downstream throws on it, and an empty array is indistinguishable from a call
+   * where the subject simply said nothing. A reader has to be able to tell "we
+   * destroyed this" from "there was nothing here".
+   */
+  shredded: boolean;
   audit: AuditTrail;
 }
 

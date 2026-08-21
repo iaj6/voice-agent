@@ -113,10 +113,44 @@ export function unseal(sealed: SealedValue, key: Buffer | null): unknown {
  */
 export const SHREDDED = { __shredded: true } as const;
 
-export function unsealOrMark(sealed: SealedValue, key: Buffer | null): unknown {
+/**
+ * Distinct from SHREDDED on purpose.
+ *
+ * A bare catch treated a destroyed key, a failed GCM auth tag and a corrupt blob
+ * as the same outcome — so someone editing a ciphertext in the database would
+ * have had the field reported as *lawfully destroyed under retention* rather
+ * than as an integrity failure. This file's own header says those two have to be
+ * distinguishable; they were not.
+ */
+export const UNREADABLE = { __unreadable: true } as const;
+
+/**
+ * A marker of the same shape as the field it replaces.
+ *
+ * A single object marker was returned for every field, including ones typed as
+ * arrays and strings — so a shredded session hit `[...prior.subjectUtterances]`
+ * on the resume path and threw TypeError, in a function whose contract is that
+ * reading a shredded record must not throw.
+ */
+export function markerFor(
+  original: unknown,
+  marker: typeof SHREDDED | typeof UNREADABLE,
+): unknown {
+  const label = marker === SHREDDED ? "[destroyed]" : "[unreadable]";
+  if (Array.isArray(original)) return [];
+  if (typeof original === "string") return label;
+  return marker;
+}
+
+export function unsealOrMark(
+  sealed: SealedValue,
+  key: Buffer | null,
+  shape?: unknown,
+): unknown {
   try {
     return unseal(sealed, key);
-  } catch {
-    return SHREDDED;
+  } catch (err) {
+    const marker = err instanceof ShreddedError ? SHREDDED : UNREADABLE;
+    return shape === undefined ? marker : markerFor(shape, marker);
   }
 }

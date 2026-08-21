@@ -12,7 +12,11 @@ import assert from "node:assert/strict";
 import { executeTool } from "../lib/agent/tools.ts";
 import { __setSessionStore, getSessionStore } from "../lib/store/session-store.ts";
 import { __setKeyStore } from "../lib/store/keys.ts";
-import { __setSubjectStore, getSubjectStore } from "../lib/store/subjects.ts";
+import {
+  __setSubjectStore,
+  getSubjectStore,
+  isWithdrawn,
+} from "../lib/store/subjects.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
 const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
@@ -98,4 +102,28 @@ test("reinstating a participant restores ordinary check-ins", async () => {
   const session = await call();
   const out = await executeTool(session, "verify_subject", VERIFY);
   assert.equal((out.result as Record<string, unknown>).verified, true);
+});
+
+test("reinstatement supersedes the withdrawal rather than erasing it", async () => {
+  const store = getSubjectStore();
+  await store.withdraw(VERIFY.subject_id, "Dana Whitfield, RN", "Called the site.");
+  await store.reinstate(VERIFY.subject_id, "Dr Alvarez");
+
+  const state = await store.get(VERIFY.subject_id);
+  assert.ok(state?.withdrawnAt, "the withdrawal was erased; nothing records it happened");
+  assert.equal(state.withdrawnBy, "Dana Whitfield, RN");
+  assert.equal(state.reinstatedBy, "Dr Alvarez", "un-withdrawal is not attributable");
+  assert.equal(isWithdrawn(state), false);
+});
+
+test("a fresh withdrawal after a reinstatement takes effect", async () => {
+  const store = getSubjectStore();
+  await store.withdraw(VERIFY.subject_id, "Dana Whitfield, RN", "First.");
+  await store.reinstate(VERIFY.subject_id, "Dr Alvarez");
+  await store.withdraw(VERIFY.subject_id, "Dana Whitfield, RN", "Second, and final.");
+
+  assert.equal(isWithdrawn(await store.get(VERIFY.subject_id)), true);
+  const session = await call();
+  const out = await executeTool(session, "verify_subject", VERIFY);
+  assert.equal(out.isError, true, "a re-withdrawn participant was verified");
 });

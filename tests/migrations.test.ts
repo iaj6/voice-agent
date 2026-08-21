@@ -150,14 +150,26 @@ describe(
       );
 
       // 0003: a key row must be all-key or all-destroyed, never half of each.
+      //
+      // A real session row first. The earlier version used an id with no session
+      // behind it, so the foreign key fired before the check constraint was ever
+      // reached — the assertion passed whether or not 0003 defined the check at
+      // all, which is the same as not testing it.
+      const sessionId = "11111111-1111-1111-1111-111111111111";
+      await scratch.query(
+        `insert into check_in_session (id, status, record, messages)
+         values ($1, 'awaiting_verification', '{}'::jsonb, '[]'::jsonb)`,
+        [sessionId],
+      );
       await assert.rejects(
         () =>
           scratch.query(
             `insert into session_key (session_id, key, destroyed_at)
-             values ('00000000-0000-0000-0000-000000000001', null, null)`,
+             values ($1, null, null)`,
+            [sessionId],
           ),
-        /session_key_destruction_is_complete|violates foreign key/,
-        "0003 did not apply, or its destruction check does not hold",
+        /session_key_destruction_is_complete/,
+        "0003 applied but its destruction check does not hold",
       );
     });
 
