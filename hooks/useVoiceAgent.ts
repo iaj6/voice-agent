@@ -48,6 +48,8 @@ export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  /** Prompt tokens written to cache. Part of the prompt, and billed above input. */
+  cacheWriteTokens: number;
   turns: number;
 }
 
@@ -76,6 +78,7 @@ export function useVoiceAgent() {
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     turns: 0,
   });
   // Half-duplex by default. Full-duplex barge-in over laptop speakers feeds the
@@ -228,6 +231,8 @@ export function useVoiceAgent() {
                   outputTokens: u.outputTokens + Number(event.outputTokens ?? 0),
                   cacheReadTokens:
                     u.cacheReadTokens + Number(event.cacheReadTokens ?? 0),
+                  cacheWriteTokens:
+                    u.cacheWriteTokens + Number(event.cacheWriteTokens ?? 0),
                   turns: u.turns + 1,
                 }));
                 break;
@@ -382,7 +387,13 @@ export function useVoiceAgent() {
     setSafetyHits([]);
     setSnapshot(null);
     setInterim("");
-    setUsage({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, turns: 0 });
+    setUsage({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      turns: 0,
+    });
     setEchoSuppressed(0);
     setVoiceFallbacks(0);
     pendingRef.current = [];

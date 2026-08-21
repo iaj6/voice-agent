@@ -172,5 +172,9 @@ was simply never visible there.
 ## Files
 
 - `app/api/v1/chat/completions/route.ts` — the shim
-- `.spike-logs/elevenlabs-requests.jsonl` — every payload received, gitignored
+- `.spike-logs/elevenlabs-requests.jsonl` — every payload received, gitignored.
+  **Off by default since the 1.6 retention review**: it records the whole conversation
+  in plaintext, unrotated, outside every retention control the system has. Re-enable
+  for spike work with `VOICE_AGENT_SPIKE_LOG=1`; it is refused under
+  `NODE_ENV=production` regardless.
 - Prompt change: `lib/agent/system-prompt.ts`, the "Speak before you work" rule

@@ -24,12 +24,13 @@ export function ActivityPanel({
   voiceName: string;
   neuralVoice: boolean;
 }) {
+  // Prompt tokens are input + cache writes + cache reads. Omitting the writes
+  // shrinks the denominator and flatters the figure, which matters here because
+  // this number is the visible payoff of keeping the system prompt byte-stable.
+  const promptTokens =
+    usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const cacheRate =
-    usage.inputTokens + usage.cacheReadTokens > 0
-      ? Math.round(
-          (usage.cacheReadTokens / (usage.inputTokens + usage.cacheReadTokens)) * 100,
-        )
-      : 0;
+    promptTokens > 0 ? Math.round((usage.cacheReadTokens / promptTokens) * 100) : 0;
 
   return (
     <div className="flex flex-col gap-5 p-4">

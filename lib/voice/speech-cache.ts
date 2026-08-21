@@ -53,15 +53,32 @@ export function speechCacheKey(text: string, identity: SpeechIdentity): string {
  */
 let cacheable: Set<string> | null = null;
 
-export function cacheableUnits(): Set<string> {
+function units(): Set<string> {
   if (cacheable) return cacheable;
-  const units = new Set<string>();
+  const built = new Set<string>();
   for (const line of FIXED_LINES) {
     const chunker = new SentenceChunker();
-    for (const sentence of chunker.push(line)) units.add(sentence);
+    for (const sentence of chunker.push(line)) built.add(sentence);
     const trailing = chunker.flush();
-    if (trailing) units.add(trailing);
+    if (trailing) built.add(trailing);
   }
-  cacheable = units;
-  return units;
+  cacheable = built;
+  return built;
+}
+
+/**
+ * Whether this exact text may be written to the on-disk cache.
+ *
+ * A predicate rather than the set itself. Handing out the memoised `Set` let any
+ * caller `add()` to it and broaden the allowlist process-wide — which is the
+ * failure this control exists to prevent, reachable in one line and looking like
+ * a cache-warming tweak.
+ */
+export function isCacheable(text: string): boolean {
+  return units().has(text.trim());
+}
+
+/** The allowlist as a list, for warming. A copy: callers cannot widen it. */
+export function cacheableLines(): string[] {
+  return [...units()];
 }

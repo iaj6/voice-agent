@@ -411,6 +411,7 @@ Test identities: `001-0042` / `1958-03-11`, `001-0055` / `1971-11-02`, `002-0013
 |---|---|---|
 | `VOICE_AGENT_EFFORT` | `medium` | Reasoning effort — `low` for lowest latency, `high`+ for harder grading calls |
 | `VOICE_AGENT_FAST_MODE` | off | `1` enables Opus 5 fast mode (faster output, premium pricing) |
+| `VOICE_AGENT_SPIKE_LOG` | off | `1` writes raw request bodies to `.spike-logs` — whole conversations in plaintext. Dev only; refused in production |
 | `VOICE_AGENT_URL` | `http://localhost:3100` | Base URL the eval harness and warm script drive |
 | `ELEVENLABS_API_KEY` | unset | Enables the pinned neural voice; falls back to browser speech when absent |
 

@@ -46,10 +46,25 @@ const BASE = process.env.VOICE_AGENT_URL ?? "http://localhost:3100";
  * cache writes at 1.25x, which is why both are counted separately rather than
  * folded into input.
  */
-const PRICE_PER_MTOK = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+const PRICE_PER_MTOK = {
+  standard: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  // Fast mode is the same model at premium rates. The harness drives the dev
+  // server over HTTP and cannot see the flag, so the runner reports it on the
+  // usage event — otherwise a server started with VOICE_AGENT_FAST_MODE=1 would
+  // have every figure below halved while the line still read "list price".
+  fast: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+};
 
 function emptyUsage() {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    calls: 0,
+    fastCalls: 0,
+    unbilledRetries: 0,
+  };
 }
 
 function addUsage(into, u) {
@@ -58,14 +73,20 @@ function addUsage(into, u) {
   into.cacheRead += u.cacheRead ?? 0;
   into.cacheWrite += u.cacheWrite ?? 0;
   into.calls += 1;
+  if (u.fastMode) into.fastCalls += 1;
+  into.unbilledRetries += u.retriedAttempts ?? 0;
 }
 
 function costOf(u) {
+  // Priced per rate table, not per call, because a run is either fast mode or it
+  // is not — the server is started one way. If that ever stops being true this
+  // needs per-call rates rather than a majority vote.
+  const rate = u.fastCalls > 0 ? PRICE_PER_MTOK.fast : PRICE_PER_MTOK.standard;
   return (
-    (u.input * PRICE_PER_MTOK.input +
-      u.output * PRICE_PER_MTOK.output +
-      u.cacheRead * PRICE_PER_MTOK.cacheRead +
-      u.cacheWrite * PRICE_PER_MTOK.cacheWrite) /
+    (u.input * rate.input +
+      u.output * rate.output +
+      u.cacheRead * rate.cacheRead +
+      u.cacheWrite * rate.cacheWrite) /
     1_000_000
   );
 }
@@ -302,6 +323,8 @@ async function agentTurn(sessionId, utterance, source, verbose, log = () => {}) 
           output: ev.outputTokens,
           cacheRead: ev.cacheReadTokens,
           cacheWrite: ev.cacheWriteTokens,
+          fastMode: ev.fastMode,
+          retriedAttempts: ev.retriedAttempts,
         });
       } else if (ev.type === "speak") spoken.push(ev.text);
       else if (ev.type === "tool_call") {
@@ -859,8 +882,13 @@ if (SPEND.agent.calls + SPEND.persona.calls > 0) {
         `  ${money(c)}`,
     );
   }
-  const cacheable = SPEND.agent.cacheRead + SPEND.agent.input;
-  const hitRate = cacheable > 0 ? (SPEND.agent.cacheRead / cacheable) * 100 : 0;
+  // Prompt tokens are input + cache_creation + cache_read. Leaving the writes out
+  // of the denominator shrinks the base and flatters the number — the same commit
+  // that added cacheWrite so the cost would not undercount had this overcounting
+  // two lines below it.
+  const prompt =
+    SPEND.agent.input + SPEND.agent.cacheRead + SPEND.agent.cacheWrite;
+  const hitRate = prompt > 0 ? (SPEND.agent.cacheRead / prompt) * 100 : 0;
   const calls = SPEND.agent.calls + SPEND.persona.calls;
   console.log(
     `  ${C.bold("total")}    ${String(calls).padStart(4)} calls  ` +
@@ -870,12 +898,21 @@ if (SPEND.agent.calls + SPEND.persona.calls > 0) {
   if (repeat > 1) {
     console.log(C.dim(`  ${money(totalCost / repeat)} per round · ${repeat} rounds`));
   }
+  const rateLabel = SPEND.agent.fastCalls > 0 ? "Opus 5 fast mode" : "Opus 5 list price";
   console.log(
     C.dim(
-      `  Opus 5 list price. The personas are the harness, not the system — ` +
+      `  ${rateLabel}. The personas are the harness, not the system — ` +
         `${((personaCost / (totalCost || 1)) * 100).toFixed(0)}% of this run was the fixture.`,
     ),
   );
+  if (SPEND.agent.unbilledRetries > 0) {
+    console.log(
+      C.dim(
+        `  ${SPEND.agent.unbilledRetries} attempt(s) failed and were retried; the API ` +
+          `billed their prompt tokens and they are not counted above.`,
+      ),
+    );
+  }
 }
 
 if (repeat > 1) {

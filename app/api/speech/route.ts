@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   MODEL_ID,
@@ -6,7 +6,11 @@ import {
   VOICE_ID,
   VOICE_SETTINGS,
 } from "@/lib/voice/tts-config";
-import { cacheableUnits, speechCacheKey } from "@/lib/voice/speech-cache";
+import {
+  cacheableLines,
+  isCacheable,
+  speechCacheKey,
+} from "@/lib/voice/speech-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +49,38 @@ async function readCache(key: string): Promise<Buffer | null> {
   }
 }
 
+/**
+ * Deletes anything in the cache that the allowlist would not write today.
+ *
+ * The allowlist gates writes, which stops the store growing more subject audio —
+ * it does nothing about what is already there. Ten subject-derived files were
+ * removed by hand from one machine; any other checkout or long-lived host that
+ * ran the earlier code still holds its own, still serves them, and RETENTION.md
+ * now says this store holds fixed instrument wording only.
+ *
+ * Because the key is a pure hash of (text, voice identity), the valid set is
+ * computable, so the control can enforce itself rather than depending on someone
+ * remembering to run a script. Cheap and safe: everything here is regenerable,
+ * and anything not on the allowlist would never have been read again anyway.
+ */
+let pruned: Promise<void> | null = null;
+
+function pruneCacheOnce(): Promise<void> {
+  pruned ??= (async () => {
+    try {
+      const valid = new Set(cacheableLines().map((line) => cacheKey(line)));
+      for (const file of await readdir(CACHE_DIR)) {
+        if (!file.endsWith(".mp3")) continue;
+        if (valid.has(file.slice(0, -4))) continue;
+        await unlink(path.join(CACHE_DIR, file)).catch(() => {});
+      }
+    } catch {
+      // No cache directory yet, or an unreadable one. Nothing to prune.
+    }
+  })();
+  return pruned;
+}
+
 async function writeCache(key: string, audio: Buffer): Promise<void> {
   try {
     await mkdir(CACHE_DIR, { recursive: true });
@@ -66,7 +102,7 @@ async function writeCache(key: string, audio: Buffer): Promise<void> {
  * only way the two stay aligned.
  */
 export async function GET() {
-  return Response.json({ lines: [...cacheableUnits()] });
+  return Response.json({ lines: cacheableLines() });
 }
 
 export async function POST(request: Request) {
@@ -94,6 +130,8 @@ export async function POST(request: Request) {
   if (text.length > 1000) {
     return Response.json({ error: "Text too long" }, { status: 413 });
   }
+
+  await pruneCacheOnce();
 
   const key = cacheKey(text);
   const cached = await readCache(key);
@@ -154,7 +192,7 @@ export async function POST(request: Request) {
   // symptom description was being written to disk as audio. Nothing could find it
   // afterwards either: the filename is a hash of the text, so locating one
   // subject's audio required already knowing the exact words they used.
-  if (cacheableUnits().has(text.trim())) {
+  if (isCacheable(text)) {
     await writeCache(key, audio);
   }
 

@@ -175,6 +175,15 @@ export type AgentEvent =
       outputTokens: number;
       cacheReadTokens: number;
       cacheWriteTokens: number;
+      /** Fast mode bills at 2x. Anything pricing this usage has to know. */
+      fastMode: boolean;
+      /**
+       * Attempts made before this one succeeded. Their prompt tokens were billed
+       * by the API and are not in the counts above, because a failed attempt
+       * never yields a message to read usage from. Reported so the shortfall is
+       * visible rather than silently missing.
+       */
+      retriedAttempts: number;
     }
   | { type: "done"; terminal: boolean }
   | { type: "error"; message: string };
@@ -416,6 +425,8 @@ export async function* runTurn(
     // after that a retry would make the agent repeat itself mid-sentence.
     let message: Anthropic.Beta.BetaMessage | null = null;
     let spokeThisTurn = false;
+    /** Attempts that failed before one succeeded; their tokens are still billed. */
+    let attemptsBeforeSuccess = 0;
     /** Set when the model started speaking as the subject and was cut off. */
     let fabricationCut = false;
 
@@ -509,6 +520,7 @@ export async function* runTurn(
           isTransientConnectionError(err);
 
         if (retryable) {
+          attemptsBeforeSuccess += 1;
           await new Promise((r) => setTimeout(r, 200 * attempt));
           continue;
         }
@@ -546,6 +558,8 @@ export async function* runTurn(
       // Billed at a premium over ordinary input, so leaving it out understates
       // the bill rather than rounding it.
       cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
+      fastMode: FAST_MODE,
+      retriedAttempts: attemptsBeforeSuccess,
     };
 
     if (message.stop_reason === "refusal") {

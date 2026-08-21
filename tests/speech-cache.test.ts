@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cacheableUnits, speechCacheKey } from "../lib/voice/speech-cache.ts";
+import {
+  cacheableLines,
+  isCacheable,
+  speechCacheKey,
+} from "../lib/voice/speech-cache.ts";
 
 const BASE = {
   modelId: "eleven_flash_v2_5",
@@ -61,13 +65,11 @@ test("key is a hex sha256 and leaks no source text", () => {
  * diff.
  */
 test("only the fixed instrument wording is cacheable", () => {
-  const units = cacheableUnits();
-
-  assert.ok(units.size > 0, "nothing is cacheable, so the cache is dead");
+  assert.ok(cacheableLines().length > 0, "nothing is cacheable, so the cache is dead");
 
   // Every scripted question the protocol pins, as the runtime asks for it.
   assert.ok(
-    units.has("And what is your date of birth?"),
+    isCacheable("And what is your date of birth?"),
     "a fixed instrument line is not cacheable, so the cache does nothing useful",
   );
 
@@ -78,8 +80,19 @@ test("only the fixed instrument wording is cacheable", () => {
     "Thank you for telling me about your daughter driving you to the hospital.",
   ]) {
     assert.ok(
-      !units.has(improvised),
+      !isCacheable(improvised),
       `subject-derived speech is cacheable and would be written to disk: ${improvised}`,
     );
   }
+});
+
+test("the allowlist cannot be widened by a caller", () => {
+  // It used to hand out the memoised Set, so one add() broadened the control
+  // process-wide — a line that would read as a cache-warming tweak in a diff.
+  const lines = cacheableLines();
+  lines.push("Thank you for telling me about the blood you coughed up.");
+  assert.ok(
+    !isCacheable("Thank you for telling me about the blood you coughed up."),
+    "mutating what cacheableLines() returned widened the allowlist",
+  );
 });

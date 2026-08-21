@@ -82,7 +82,11 @@ that no option below would govern. Two are now closed:
    were subject-derived**, 168 KB of the agent reading back non-scripted sentences; they
    have been deleted. The allowlist moved into `lib/voice/speech-cache.ts` and is covered
    by a test, because re-broadening it would look like a performance improvement and read
-   like one in a diff.
+   like one in a diff. The store also prunes itself on first use: the allowlist gated
+   *writes*, which does nothing about a host that already ran the older code and is still
+   serving what it cached then. Since the key is a hash of the text, the valid set is
+   computable, so the control enforces itself rather than depending on someone
+   remembering to run a script.
 3. **`audit_entry` holding a verbatim transcript — still open, and deliberately.**
    Defensible, and arguably correct for a regulated trail, but it should be a decision
    rather than a side effect. It is the reason D1-a is not available.
@@ -273,10 +277,12 @@ crypto-shredding for anything that does have a destruction date, documents legal
 and builds it when it can bite, and refuses to continue a call with a withdrawn
 participant.
 
-**Do these regardless of the decisions, and first**
+**Already done, regardless of the decisions**
 
-0. Disable or dev-gate `.spike-logs`; restrict `.speech-cache` to the fixed instrument
-   wording. Two uncontrolled stores of subject content that no option above governs.
+0. `.spike-logs` gated behind an explicit flag and refused in production;
+   `.speech-cache` restricted to the fixed instrument wording, with the stale
+   subject-derived entries deleted and the store pruned on first use so a host that
+   ran the older code cleans itself. See §1.
 
 **Then, in order — and the order is not the same as the first draft's**
 
