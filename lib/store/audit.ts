@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { seal } from "./seal.ts";
 
 /**
  * Append-only, hash-chained audit trail.
@@ -85,9 +86,31 @@ function snapshotValue(value: unknown): unknown {
 export class AuditTrail {
   private entries: AuditEntry[] = [];
   private readonly sessionId: string;
+  /**
+   * The session key, when this trail is sealing.
+   *
+   * Sealing happens *before* hashing, so the chain covers ciphertext. That is
+   * the whole reason crypto-shredding works here: destroy the key and the
+   * content is unreadable, while every entry still hashes to what it always
+   * hashed to and the chain still verifies. Hashing plaintext and encrypting
+   * afterwards would mean a shredded record could never be verified again —
+   * which is to say it would look tampered with rather than destroyed.
+   */
+  private key: { id: string; material: Buffer } | null = null;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
+  }
+
+  /**
+   * Turns on sealing for entries recorded from here on.
+   *
+   * Entries already recorded are left alone. Re-sealing them would change their
+   * hashes, and rewriting history to make it more private is still rewriting
+   * history.
+   */
+  sealWith(keyId: string, material: Buffer): void {
+    this.key = { id: keyId, material };
   }
 
   record(input: {
@@ -117,8 +140,8 @@ export class AuditTrail {
       // retroactively rewrite what this entry says happened — which is the exact
       // failure mode an audit trail exists to prevent. It also breaks the hash
       // chain, since verifyChain() would rehash the mutated value.
-      before: snapshotValue(input.before),
-      after: snapshotValue(input.after),
+      before: this.protect(input.before),
+      after: this.protect(input.after),
       reason: input.reason,
       prevHash,
     };
@@ -126,6 +149,19 @@ export class AuditTrail {
     const entry: AuditEntry = { ...draft, hash: computeHash(draft) };
     this.entries.push(entry);
     return entry;
+  }
+
+  /**
+   * Snapshot, then seal if this trail has a key.
+   *
+   * Null stays null. An entry with no before-value should still read as having
+   * none after shredding, rather than as an opaque blob nobody can account for.
+   */
+  private protect(value: unknown): unknown {
+    const snapshot = snapshotValue(value);
+    if (snapshot === null || snapshot === undefined) return null;
+    if (!this.key) return snapshot;
+    return seal(snapshot, this.key.id, this.key.material);
   }
 
   all(): readonly AuditEntry[] {

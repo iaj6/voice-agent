@@ -18,6 +18,7 @@ import {
   type SafetyScreenRecord,
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
+import { getSubjectStore } from "../store/subjects.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -679,6 +680,50 @@ const handlers: Record<string, Handler> = {
               "with ended_early true."
             : "Tell the subject the details did not match and offer one more try. " +
               "Do not hint at what the correct values are.",
+        },
+        isError: true,
+      };
+    }
+
+    // Withdrawal is checked here because here is the first moment the system
+    // knows who is on the call. A session is opened before anyone identifies
+    // themselves — createSession takes no subject — so there is no earlier
+    // enforcement point, and refusing to *place* a call is not something this
+    // system does anyway. What it can do is decline to collect.
+    //
+    // Nothing clinical has been asked at this point: verification is step 1 and
+    // the open question is step 2. So the call ends having captured an identity
+    // and nothing else, which is the correct record of a call that should not
+    // have happened.
+    const state = await getSubjectStore().get(subject.subjectId);
+    if (state?.withdrawnAt) {
+      session.audit.record({
+        actor: "system",
+        action: "WITHDRAWN_SUBJECT_REFUSED",
+        entity: "CheckInSession",
+        entityId: session.id,
+        after: {
+          subjectId: subject.subjectId,
+          withdrawnAt: state.withdrawnAt,
+          withdrawnBy: state.withdrawnBy,
+        },
+        reason:
+          "This participant has withdrawn from the study. The check-in was ended " +
+          "before any clinical question was asked. Data collected before the " +
+          "withdrawal is unaffected and is retained.",
+      });
+      return {
+        result: {
+          verified: false,
+          withdrawn: true,
+          instruction:
+            "This participant has withdrawn from the study, so there is nothing " +
+            "to collect. Say exactly: \"Thank you — I can see you've withdrawn " +
+            "from the study, so there's nothing I need to ask you today. Your " +
+            "study team will be in touch if anything is needed. Take care, " +
+            "goodbye.\" Then call complete_check_in with ended_early true. Do not " +
+            "ask a single clinical question, and do not try to talk them out of " +
+            "anything.",
         },
         isError: true,
       };

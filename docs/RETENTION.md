@@ -1,11 +1,24 @@
-# Retention and legal hold — decisions needed
+# Retention and legal hold
 
-**Status:** options, awaiting decision · **Backlog item:** 1.6 (Tier C) · **Owner:** Ian Jones
+**Status:** decided 2026-08-21 · **Backlog item:** 1.6 (Tier C) · **Owner:** Ian Jones
 
-This is the write-up for item 1.6. It is not a policy yet — it is the set of decisions
-that have to be made before one can be written, each with the options I can see and what
-I would pick. Reply with a letter per decision and I will turn it into the policy and
-the code it implies.
+The six decisions below are settled. Each one keeps the options it was chosen from,
+because a policy that records only the answer cannot be re-argued when the facts change —
+and several of these turn on facts (the GDPR legal basis, whether the EU is in scope) that
+are still open.
+
+| | Decision | Chosen | Status |
+|---|---|---|---|
+| **D1** | Records status | **b** — non-source, retained on the trial clock | policy only |
+| **D2** | Retention clock | **b** — the sponsor's trial SOP | policy only |
+| **D3** | Subject audio | **c** — all of it, pilot only, fixed destruction date | **blocked on 6.2 and 6.5** |
+| **D4** | Deletion mechanics | **a** for trial-clock data, **c** for anything with a destruction date | **built** |
+| **D5** | Legal hold | **a** — procedural now, **b** with the first purge job | policy only |
+| **D6** | Withdrawal | **b** — enforced at verification | **built** |
+
+D3 is not deferred by choice. It needs the data-flow and subprocessor map (6.2) because
+subject audio already reaches a third party, and consent language covering recording (6.5)
+because it is IRB-facing. Both are yours rather than mine.
 
 Everything below assumes the shadow pilot in `SPEC.md` §2: one site, 10–20 consented
 participants, 8 weeks, running alongside the existing eDiary, **no output used for any
@@ -134,7 +147,7 @@ whether a subject can compel deletion at all.
 
 ---
 
-## 3. The decisions
+## 3. The decisions, and what they were chosen from
 
 ### D1 — What is this system, for records purposes?
 
@@ -277,26 +290,52 @@ crypto-shredding for anything that does have a destruction date, documents legal
 and builds it when it can bite, and refuses to continue a call with a withdrawn
 participant.
 
-**Already done, regardless of the decisions**
+**Built**
 
 0. `.spike-logs` gated behind an explicit flag and refused in production;
    `.speech-cache` restricted to the fixed instrument wording, with the stale
    subject-derived entries deleted and the store pruned on first use so a host that
    ran the older code cleans itself. See §1.
+1. **D4-c — crypto-shredding.** `session_key` (migration 0003) holds one key per
+   session, stamped with the subject when verification succeeds. Free text is sealed
+   with AES-256-GCM before the audit hash is taken, which is what lets the chain
+   survive destruction: the hash covers ciphertext, so a shredded record still
+   verifies instead of looking tampered with. Structured clinical data — grades,
+   counts, item ids — stays readable, because it is what a coordinator reviews and
+   it identifies nobody. `node scripts/shred.mjs --subject <id> --reason <text>`
+   reports and stops; `--confirm` destroys. Verified against the live database:
+   the record survives, the chain verifies, the content is gone, and the key row
+   carries who destroyed it and why.
+2. **D6-b — withdrawal.** `subject_state` (migration 0004) is the first
+   subject-level entity in the schema. `POST /api/subject/withdrawal` records it,
+   and `verify_subject` refuses a withdrawn participant before a single clinical
+   question — the earliest point the system knows who is calling, because a
+   session is opened before anyone identifies themselves. The refusal is audited.
+   Data collected before the withdrawal is retained, per ICH E6 and EDPB 3/2019;
+   destruction stays a separate, separately authorised act.
+
+**Threat model, stated plainly.** Keys sit in the same database as the ciphertext,
+so anyone who can read the data can read the keys while they exist. That is not an
+oversight: what this defends against is *being unable to prove destruction*, and a
+key row that is destroyed is destroyed. Confidentiality-at-rest against a database
+compromise needs the keys in a KMS, which is a deployment decision — the sealed
+format does not change when it is made.
+
+**Still to build**
 
 **Then, in order — and the order is not the same as the first draft's**
 
-1. **Per-subject encryption and key destruction (D4-c)** — the largest piece, and it has
-   to come first or not at all, because it cannot be retrofitted past the append-only
-   triggers and the hash chain. Deciding "later" is deciding "no".
-2. Data-flow and subprocessor map (backlog 6.2) — a prerequisite for D3, not a parallel
+1. Data-flow and subprocessor map (backlog 6.2) — a prerequisite for D3, not a parallel
    task, because subject audio already leaves the machine.
-3. Consent language covering recording, AI, subprocessors and the human alternative
+2. Consent language covering recording, AI, subprocessors and the human alternative
    (backlog 6.5) — blocking for D3-c, and IRB-facing.
-4. Audio capture and storage with a fixed destruction date (D3-c) — moderate.
-5. Withdrawal: a subject-level entity to hold the flag, a coordinator write path to set
-   it, and enforcement at verification (D6-b) — more than the afternoon I first said.
-6. Legal-hold flag (D5-b) — small, sequenced with the first purge job.
+3. Audio capture and storage with a fixed destruction date (D3-c) — moderate, and
+   blocked on the two above.
+4. Legal-hold flag (D5-b) — small, and sequenced with the first purge job. D5-a is the
+   decision for now: nothing deletes automatically, so a hold has nothing to suspend.
+5. Authentication on `POST /api/subject/withdrawal`. It is unauthenticated, which is
+   fine for a fabricated roster and not fine the day a real participant exists — who
+   recorded a withdrawal is part of what makes it evidence.
 
 ---
 

@@ -124,7 +124,13 @@ describe(
       );
       assert.deepEqual(
         tables.rows.map((r) => r.table_name),
-        ["audit_entry", "check_in_session", "schema_migration"],
+        [
+          "audit_entry",
+          "check_in_session",
+          "schema_migration",
+          "session_key",
+          "subject_state",
+        ],
       );
 
       const triggers = await scratch.query(
@@ -141,6 +147,17 @@ describe(
       assert.ok(
         idx.rows.some((r) => r.indexname === "check_in_session_open_idx"),
         "0002 did not apply, so migrations after the baseline are not running",
+      );
+
+      // 0003: a key row must be all-key or all-destroyed, never half of each.
+      await assert.rejects(
+        () =>
+          scratch.query(
+            `insert into session_key (session_id, key, destroyed_at)
+             values ('00000000-0000-0000-0000-000000000001', null, null)`,
+          ),
+        /session_key_destruction_is_complete|violates foreign key/,
+        "0003 did not apply, or its destruction check does not hold",
       );
     });
 

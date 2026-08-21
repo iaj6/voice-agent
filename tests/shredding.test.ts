@@ -1,0 +1,215 @@
+/**
+ * Crypto-shredding, against real Postgres.
+ *
+ * The claim: destroy the key and the subject's content is unrecoverable, while
+ * the record still proves it existed and its audit trail still verifies. Both
+ * halves matter. A record that vanishes cannot answer "did you hold data on this
+ * person"; a chain that stops verifying after a lawful destruction looks like
+ * tampering rather than compliance.
+ */
+
+import { test, before, beforeEach, after, describe } from "node:test";
+import assert from "node:assert/strict";
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { __resetDb } from "../lib/store/db.ts";
+import { __setSessionStore, getSessionStore } from "../lib/store/session-store.ts";
+import { __setKeyStore, getKeyStore } from "../lib/store/keys.ts";
+import { executeTool } from "../lib/agent/tools.ts";
+import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/scratch-db.ts";
+
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
+const AE = {
+  verbatim_term: "I've been very tired",
+  coded_term: "Fatigue",
+  onset_description: "this week",
+  ongoing: true,
+  grade: 2,
+  grade_rationale: "Cut back on errands.",
+  limits_self_care: false,
+  spontaneous: true,
+};
+
+let scratch: ScratchDb | null = null;
+let raw: NeonQueryFunction<false, false> | null = null;
+const originalUrl = process.env.DATABASE_URL;
+
+describe(
+  "crypto-shredding",
+  { skip: databaseAvailable() ? false : "DATABASE_URL not set" },
+  () => {
+    before(async () => {
+      scratch = await createScratchDb();
+      process.env.DATABASE_URL = scratch.url;
+      raw = neon(scratch.url);
+      __resetDb();
+      __setSessionStore(null);
+      __setKeyStore(null);
+    });
+
+    after(async () => {
+      raw = null;
+      __setSessionStore(null);
+      __setKeyStore(null);
+      __resetDb();
+      if (originalUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = originalUrl;
+      await scratch?.drop();
+    });
+
+    beforeEach(async () => {
+      await raw!.query(
+        `update check_in_session set completed_at = now() where completed_at is null`,
+      );
+    });
+
+    async function recordedCall() {
+      const store = getSessionStore();
+      const session = await store.create();
+      session.subjectUtterances = [...SPOKEN];
+      await executeTool(session, "verify_subject", VERIFY);
+      await executeTool(session, "record_adverse_event", AE);
+      await store.save(session);
+      return session;
+    }
+
+    test("subject speech is not stored in the clear", async () => {
+      const session = await recordedCall();
+      const rows = await raw!.query(
+        `select record::text as record, messages::text as messages
+           from check_in_session where id = $1`,
+        [session.id],
+      );
+      const stored = rows[0].record + rows[0].messages;
+
+      assert.ok(
+        !stored.includes("couldn't shower Tuesday"),
+        "the subject's own words are in the database in plaintext",
+      );
+      assert.ok(
+        !stored.includes("1958-03-11"),
+        "the date of birth is in the database in plaintext",
+      );
+      // Structured clinical data stays readable — it is what a coordinator
+      // reviews and it identifies nobody on its own.
+      assert.ok(stored.includes("Fatigue"), "the coded term should stay readable");
+    });
+
+    test("the audit trail is not a plaintext copy of the transcript", async () => {
+      const session = await recordedCall();
+      const rows = await raw!.query(
+        `select coalesce(string_agg(after_value::text, ' '), '') as v
+           from audit_entry where session_id = $1`,
+        [session.id],
+      );
+      assert.ok(
+        !rows[0].v.includes("couldn't shower Tuesday"),
+        "audit_entry holds the subject's words in the clear",
+      );
+    });
+
+    test("a sealed record reads back exactly as it was written", async () => {
+      const session = await recordedCall();
+      const reloaded = (await getSessionStore().get(session.id))!;
+
+      assert.deepEqual(reloaded.subjectUtterances, SPOKEN);
+      assert.equal(reloaded.subject?.subjectId, VERIFY.subject_id);
+      assert.equal(reloaded.adverseEvents[0].verbatimTerm, AE.verbatim_term);
+      assert.equal(reloaded.audit.verifyChain().valid, true);
+    });
+
+    test("shredding destroys the content and leaves the record standing", async () => {
+      const session = await recordedCall();
+      const destroyed = await getKeyStore().shredSubject(
+        VERIFY.subject_id,
+        "Retention period elapsed; sponsor authorised destruction.",
+      );
+      assert.ok(destroyed > 0, "no keys were destroyed");
+
+      const rows = await raw!.query(
+        `select id, subject_id, completed_at from check_in_session where id = $1`,
+        [session.id],
+      );
+      assert.equal(rows.length, 1, "the record vanished; it should still prove it existed");
+
+      const reloaded = (await getSessionStore().get(session.id))!;
+      assert.deepEqual(
+        reloaded.subjectUtterances,
+        { __shredded: true },
+        "content survived the destruction of its key",
+      );
+      assert.deepEqual(
+        reloaded.adverseEvents[0].verbatimTerm as unknown,
+        { __shredded: true },
+        "the verbatim term survived",
+      );
+      // Grade and coded term are structured, not personal, and stay.
+      assert.equal(reloaded.adverseEvents[0].grade, 2);
+    });
+
+    test("the chain still verifies after a lawful destruction", async () => {
+      const session = await recordedCall();
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Retention elapsed.");
+
+      const reloaded = (await getSessionStore().get(session.id))!;
+      assert.equal(
+        reloaded.audit.verifyChain().valid,
+        true,
+        "a destroyed record now looks tampered with rather than destroyed",
+      );
+      assert.ok(reloaded.audit.all().length > 0, "the trail itself went missing");
+    });
+
+    test("the destruction is provable, with a reason and a time", async () => {
+      const session = await recordedCall();
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Sponsor authorised 2026-08-21.");
+
+      const rows = await raw!.query(
+        `select key, destroyed_at, destroyed_reason from session_key where session_id = $1`,
+        [session.id],
+      );
+      assert.equal(rows.length, 1, "the key row was deleted, so nothing proves destruction");
+      assert.equal(rows[0].key, null);
+      assert.notEqual(rows[0].destroyed_at, null);
+      assert.match(rows[0].destroyed_reason, /Sponsor authorised/);
+    });
+
+    test("nothing can be written to a shredded record", async () => {
+      const store = getSessionStore();
+      const session = await store.create();
+      session.subjectUtterances = [...SPOKEN];
+      await executeTool(session, "verify_subject", VERIFY);
+      await store.save(session);
+
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Retention elapsed.");
+
+      await assert.rejects(
+        () => store.save(session),
+        /shredded/,
+        "a destroyed record accepted a plaintext write, silently undoing the destruction",
+      );
+    });
+
+    test("one subject's destruction does not touch another's", async () => {
+      const other = { subject_id: "001-0055", date_of_birth: "1971-11-02" };
+      const store = getSessionStore();
+
+      const mine = await recordedCall();
+      const theirs = await store.create();
+      theirs.subjectUtterances = ["I've had a headache"];
+      await executeTool(theirs, "verify_subject", other);
+      await store.save(theirs);
+
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Retention elapsed.");
+
+      const shredded = (await store.get(mine.id))!;
+      const intact = (await store.get(theirs.id))!;
+      assert.deepEqual(shredded.subjectUtterances, { __shredded: true });
+      assert.deepEqual(
+        intact.subjectUtterances,
+        ["I've had a headache"],
+        "shredding one subject destroyed another subject's record",
+      );
+    });
+  },
+);

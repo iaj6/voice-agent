@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { AuditTrail, type AuditEntry } from "./audit.ts";
 import { getDb, isDatabaseConfigured } from "./db.ts";
+import { getKeyStore } from "./keys.ts";
+import { isSealed, seal, unsealOrMark, type SealedValue } from "./seal.ts";
 import type { CheckInSession } from "./session.ts";
 
 /**
@@ -77,6 +79,83 @@ interface StoredRecord {
   provenanceRejections: number;
   refusedQuotes: string[];
   resumable: boolean;
+}
+
+/**
+ * The free-text fields, which are the ones that identify.
+ *
+ * Sealed individually rather than sealing the whole record, because the leasing
+ * query reads `record ->> 'resumable'` and a sealed blob cannot be queried into.
+ * Structured clinical data — grades, counts, item ids, timestamps — stays
+ * readable: it is what a coordinator reviews and it identifies nobody on its own.
+ *
+ * What is sealed is everything a person said, which is where identity actually
+ * lives. A date of birth spoken aloud is in `subjectUtterances`. A verbatim
+ * symptom description can name a relative, a hospital, a street.
+ */
+function sealRecord(record: StoredRecord, keyId: string, key: Buffer): StoredRecord {
+  const s = (v: unknown) => seal(v, keyId, key);
+  return {
+    ...record,
+    subject: record.subject ? (s(record.subject) as never) : null,
+    subjectUtterances: s(record.subjectUtterances) as never,
+    refusedQuotes: s(record.refusedQuotes) as never,
+    adverseEvents: record.adverseEvents.map((e) => ({
+      ...e,
+      verbatimTerm: s(e.verbatimTerm) as never,
+      onsetDescription: s(e.onsetDescription) as never,
+    })),
+    conMeds: record.conMeds.map((m) => ({
+      ...m,
+      indicationVerbatim: s(m.indicationVerbatim) as never,
+      startedDescription: s(m.startedDescription) as never,
+    })),
+    adherence: record.adherence
+      ? { ...record.adherence, reasonVerbatim: s(record.adherence.reasonVerbatim) as never }
+      : null,
+    safetyScreen: record.safetyScreen
+      ? {
+          ...record.safetyScreen,
+          items: record.safetyScreen.items.map((i) => ({
+            ...i,
+            verbatim: s(i.verbatim) as never,
+          })),
+        }
+      : null,
+  };
+}
+
+/** Inverse of sealRecord. Shredded fields come back as a marker, never a throw. */
+function unsealRecord(record: StoredRecord, key: Buffer | null): StoredRecord {
+  const u = (v: unknown) => (isSealed(v) ? unsealOrMark(v as SealedValue, key) : v);
+  return {
+    ...record,
+    subject: (u(record.subject) ?? null) as never,
+    subjectUtterances: (u(record.subjectUtterances) ?? []) as never,
+    refusedQuotes: (u(record.refusedQuotes) ?? []) as never,
+    adverseEvents: (record.adverseEvents ?? []).map((e) => ({
+      ...e,
+      verbatimTerm: u(e.verbatimTerm) as never,
+      onsetDescription: u(e.onsetDescription) as never,
+    })),
+    conMeds: (record.conMeds ?? []).map((m) => ({
+      ...m,
+      indicationVerbatim: u(m.indicationVerbatim) as never,
+      startedDescription: u(m.startedDescription) as never,
+    })),
+    adherence: record.adherence
+      ? { ...record.adherence, reasonVerbatim: u(record.adherence.reasonVerbatim) as never }
+      : null,
+    safetyScreen: record.safetyScreen
+      ? {
+          ...record.safetyScreen,
+          items: (record.safetyScreen.items ?? []).map((i) => ({
+            ...i,
+            verbatim: u(i.verbatim) as never,
+          })),
+        }
+      : null,
+  };
 }
 
 function toRecord(session: CheckInSession): StoredRecord {
@@ -161,6 +240,11 @@ class MemorySessionStore implements SessionStore {
 
   async create(): Promise<CheckInSession> {
     const session = blankSession(randomUUID());
+    // Armed before the opening entry, exactly as the Postgres store does. A
+    // fallback that seals differently from the real store is a fallback whose
+    // tests prove nothing about the real store.
+    const key = await getKeyStore().create(session.id);
+    session.audit.sealWith(session.id, key);
     openingEntry(session);
     this.sessions.set(session.id, detach(session));
     return session;
@@ -292,28 +376,42 @@ export function __resetSchemaVersionCache(): void {
  * it a provenance stamp would suggest otherwise.
  */
 
+/**
+ * Rehydrates a trail and re-arms sealing on it.
+ *
+ * A session loaded mid-call goes on recording entries. Without re-arming, every
+ * entry written after a reload would be plaintext while the ones before it were
+ * sealed — the record would be half-shreddable, and nothing would say which half.
+ */
+function rehydrateSealed(
+  sessionId: string,
+  key: Buffer | null,
+  entries: AuditEntry[],
+): AuditTrail {
+  const trail = AuditTrail.rehydrate(sessionId, entries);
+  if (key) trail.sealWith(sessionId, key);
+  return trail;
+}
+
 class PostgresSessionStore implements SessionStore {
   readonly kind = "postgres" as const;
 
   async create(): Promise<CheckInSession> {
     const sql = getDb();
     const session = blankSession(randomUUID());
-    openingEntry(session);
-    // Which schema held this record, stamped at creation. The `instrument`
-    // column was added for exactly this and nothing had been writing to it, so
-    // every row before this claims no provenance at all.
-    //
-    // Read from the ledger, not from the migration files on disk. The files say
-    // what this checkout *contains*; the ledger says what the database has
-    // actually run, and those differ for the whole window between a deploy and
-    // its migration step — exactly when a wrong answer is most likely and least
-    // visible. Model, voice and prompt hash belong here too and follow once the
-    // runner reports them.
+
+    // The row has to exist before the key can reference it, and the key has to
+    // exist before the first audit entry is written — otherwise SESSION_OPENED
+    // is the one entry in the trail that shredding cannot reach.
     await sql`
       insert into check_in_session (id, created_at, status, record, messages, instrument)
       values (${session.id}, ${session.createdAt}, ${session.status},
               ${JSON.stringify(toRecord(session))}::jsonb, '[]'::jsonb,
               ${JSON.stringify({ schemaVersion: await appliedSchemaVersion() })}::jsonb)`;
+
+    const key = await getKeyStore().create(session.id);
+    session.audit.sealWith(session.id, key);
+    openingEntry(session);
     await this.appendAudit(session);
     return session;
   }
@@ -331,7 +429,18 @@ class PostgresSessionStore implements SessionStore {
              before_value, after_value, reason, prev_hash, hash
       from audit_entry where session_id = ${id} order by seq`) as Record<string, unknown>[];
 
-    const record = row.record as StoredRecord;
+    // Unsealed on the way in, so everything above this line works in plaintext
+    // and nothing else in the system needs to know sealing happened. A record
+    // whose key is gone comes back with markers where the content was, rather
+    // than throwing — a coordinator opening a destroyed check-in should see that
+    // it was destroyed.
+    const key = await getKeyStore().get(id);
+    const record = unsealRecord(row.record as StoredRecord, key);
+    const rawMessages = row.messages ?? [];
+    const messages = (
+      isSealed(rawMessages) ? (unsealOrMark(rawMessages, key) ?? []) : rawMessages
+    ) as CheckInSession["messages"];
+
     return {
       id: String(row.id),
       createdAt: new Date(row.created_at as string).toISOString(),
@@ -341,7 +450,7 @@ class PostgresSessionStore implements SessionStore {
       status: row.status as CheckInSession["status"],
       subject: record.subject ?? null,
       verificationAttempts: record.verificationAttempts ?? 0,
-      messages: (row.messages ?? []) as CheckInSession["messages"],
+      messages,
       subjectUtterances: record.subjectUtterances ?? [],
       provenanceRejections: record.provenanceRejections ?? 0,
       refusedQuotes: record.refusedQuotes ?? [],
@@ -356,8 +465,9 @@ class PostgresSessionStore implements SessionStore {
       completedAt: row.completed_at
         ? new Date(row.completed_at as string).toISOString()
         : null,
-      audit: AuditTrail.rehydrate(
+      audit: rehydrateSealed(
         id,
+        key,
         entries.map(
           (e): AuditEntry => ({
             seq: Number(e.seq),
@@ -423,16 +533,33 @@ class PostgresSessionStore implements SessionStore {
       );
     }
 
+    const key = await getKeyStore().get(session.id);
+    if (!key) {
+      // The key is gone, so this record has been destroyed under a retention
+      // rule. Writing plaintext into it now would undo that silently, which is
+      // worse than failing the turn.
+      throw new Error(
+        `Session ${session.id} has been shredded; its key no longer exists and ` +
+          "nothing further can be written to it.",
+      );
+    }
+
     await sql`
       update check_in_session
          set status = ${session.status},
              subject_id = ${session.subject?.subjectId ?? null},
-             record = ${JSON.stringify(toRecord(session))}::jsonb,
-             messages = ${JSON.stringify(session.messages)}::jsonb,
+             record = ${JSON.stringify(sealRecord(toRecord(session), session.id, key))}::jsonb,
+             messages = ${JSON.stringify(seal(session.messages, session.id, key))}::jsonb,
              summary = ${session.summary},
              completed_at = ${session.completedAt},
              updated_at = now()
        where id = ${session.id}`;
+
+    // Bound here rather than in the tool: this is the moment subject_id is first
+    // written, so the two stay in step without the write path having to remember.
+    if (session.subject) {
+      await getKeyStore().bindSubject(session.id, session.subject.subjectId);
+    }
     session.updatedAt = new Date().toISOString();
     await this.appendAudit(session);
   }
