@@ -15,30 +15,73 @@ regulatory decision, disposition, or safety report.**
 
 ## 1. What the system actually holds today
 
-Worth establishing before arguing about how long to keep it, because two common
-assumptions are wrong.
+Worth establishing before arguing about how long to keep it. The first draft of this
+section was wrong in three places, all of them found by review rather than by writing,
+and all of them in the same direction: **there is more subject content in more places
+than the architecture suggests.**
 
 | Data | Where | Personal? |
 |---|---|---|
 | Subject ID, site, cohort, study day | `check_in_session.subject_id`, `record` | Pseudonymous identifier |
-| **Date of birth, spoken aloud** | `messages`, `record.subjectUtterances` | **Directly identifying, in free text** |
+| **Date of birth, spoken aloud** | `messages`, `record.subjectUtterances`, `audit_entry` | **Directly identifying, free text** |
 | Verbatim symptom descriptions | `record.adverseEvents[].verbatimTerm`, `messages` | Free text, potentially identifying |
 | Full conversation transcript | `check_in_session.messages` | Free text |
-| Audit trail, including before/after values of every eCRF write | `audit_entry` | Contains the above |
-| Synthesised **agent** speech | `.speech-cache/*.mp3` | No — keyed on the agent's own words |
+| **A second full transcript** | `audit_entry.after_value`, one row per utterance | Free text, **in the table that rejects DELETE** |
+| **Raw request bodies** | `.spike-logs/elevenlabs-requests.jsonl` | **Full conversation, plaintext, unmanaged** |
+| Synthesised agent speech | `.speech-cache/*.mp3` | **Yes, when the agent reads symptoms back** |
 
-**No subject audio is persisted anywhere.** The only audio on disk is the agent's own
-text-to-speech output, cached by the text it speaks. Whether to start keeping subject
-audio is decision **D3** below, and it is a decision to *add* something rather than to
-remove it, which makes it much cheaper to get right now than later.
+**The date of birth is free text in three places.** Verification asks for it out loud, so
+the answer lands in `messages`, `subjectUtterances`, and — because the audit trail records
+every utterance — in `audit_entry` too. Checked rather than assumed: driving a real call
+through verification puts `"November 2nd, 1971."` in all three. Any de-identification
+scheme that drops a column will not catch it.
 
-**The date of birth is in the transcript as free text.** Verification asks for it out
-loud, so the answer lands in `messages` and `subjectUtterances` like any other utterance
-— and, because the audit trail records before/after values, in `audit_entry` too. Checked
-rather than assumed: driving a real call through verification puts "November 2nd, 1971"
-in all three. Any scheme that de-identifies by dropping a column will not catch it.
+**`audit_entry` is a complete second copy of the transcript.** Not just before/after
+values of eCRF writes: `runTurn` records every subject utterance verbatim as
+`UTTERANCE_RECEIVED` with the text in `after`. That table rejects `DELETE` by trigger and
+its sessions are referenced `on delete restrict`. This single fact decides more of the
+document than anything else in it — see D4.
 
----
+**There is an unmanaged plaintext transcript store on disk.** The OpenAI-compatible route
+logs every request body to `.spike-logs/elevenlabs-requests.jsonl`, which means the whole
+conversation history, appended, never rotated, unencrypted. It exists on the development
+machine now with 30 entries, 7 containing a date-of-birth-shaped string. It is gitignored,
+so no repository-level review would ever see it, and it sits outside every mechanism this
+document proposes. **Left as it is, a team could crypto-shred the database, report the
+subject's data destroyed, and be wrong.**
+
+**The speech cache is not impersonal.** The agent is instructed to read back what it
+recorded, and every synthesised sentence is cached — there is no filter limiting it to the
+fixed instrument wording. So a subject's own symptom description, rendered as audio, is
+written permanently to `.speech-cache`. Worse for deletion: the filename is a hash of the
+text, so a given subject's audio cannot be located without already knowing the exact string
+that produced it.
+
+**No subject audio is stored by this system — but subject audio does leave the machine.**
+That distinction was collapsed in the first draft and it matters, because a retention
+policy is about where data goes, not only where it rests. The browser path uses the Web
+Speech API, a cloud recogniser. The ElevenLabs Agents path validated in
+`SPIKE-elevenlabs-agents.md` has ElevenLabs performing capture, turn detection and
+transcription — that document already flags it: *"Another hop for PHI. Patient audio would
+reach ElevenLabs."* Retention of that audio is governed by a subprocessor's terms, not by
+anything decided here. **Backlog 6.2, the data-flow and subprocessor map, is a prerequisite
+for D3 rather than a parallel task.**
+
+### Fix regardless of what you decide
+
+Three of the above are not policy questions. They are uncontrolled stores of subject
+content that no option below would govern, and they should be dealt with whichever way the
+decisions go:
+
+1. **`.spike-logs`** — a spike artefact that outlived the spike. Disable the logging, or
+   gate it behind an explicit development-only flag and exclude it from any environment a
+   participant ever reaches.
+2. **`.speech-cache`** — restrict caching to the fixed instrument wording, which is the
+   only text the cache exists to make fast anyway. Everything else is a one-off sentence
+   whose cache hit rate is near zero and whose contents are the subject's.
+3. **`audit_entry` holding a verbatim transcript** — defensible, and arguably correct for a
+   regulated trail, but it should be a decision rather than a side effect. It is the reason
+   D1-a is not available.
 
 ## 2. The floor and the ceiling
 
@@ -163,6 +206,21 @@ that ends in destruction.
 that answers "prove this record existed and prove its content is gone" at the same time,
 and that pairing is exactly what a regulator asks for.
 
+**But (c) cannot be retrofitted, and the first draft of this document had it fourth in
+the build order, which was wrong.** The audit hash is computed over the `before` and
+`after` values, and `after` holds the raw utterance. Encrypting later means rewriting
+existing rows — which `audit_entry_no_mutate` rejects on UPDATE as well as DELETE, and
+which `check_in_session_locked_when_complete` blocks separately once a call is closed —
+and re-hashing, which invalidates the chain: precisely the property option (c) exists to
+preserve.
+
+> **If crypto-shredding is wanted at all, it has to be designed in before the first
+> record is written.** Under (a) alone, a destruction date assigned later has no path to
+> it short of option (d), which destroys the audit trail's whole point.
+
+That moves (c) from fourth in the build order to first, or off the list. It is the one
+decision here with an expiry date on it.
+
 ### D5 — Legal hold
 
 A legal hold suspends routine destruction when litigation, an inspection, or an
@@ -208,17 +266,27 @@ that ends a pilot, and it is roughly an afternoon's work.
 That combination: retains pilot data on the sponsor's trial clock, records audio for the
 pilot only with a fixed destruction date, never hard-deletes regulated records, uses
 crypto-shredding for anything that does have a destruction date, documents legal hold now
-and builds it when it can bite, and blocks calls to withdrawn participants in code.
+and builds it when it can bite, and refuses to continue a call with a withdrawn
+participant.
 
-**Code this implies, in order of how much it matters**
+**Do these regardless of the decisions, and first**
 
-1. Withdrawal flag honoured at session open (D6-b) — small, closes a live gap.
-2. Consent language covering recording, AI, subprocessors and the human alternative
-   (already backlog 6.5) — blocking for D3-c, and it is IRB-facing.
-3. Audio capture and storage with a fixed destruction date (D3-c) — moderate.
-4. Per-subject encryption and key destruction (D4-c) — the largest piece, and only
-   needed for data that has a destruction date.
-5. Legal-hold flag (D5-b) — small, sequenced with the first purge job.
+0. Disable or dev-gate `.spike-logs`; restrict `.speech-cache` to the fixed instrument
+   wording. Two uncontrolled stores of subject content that no option above governs.
+
+**Then, in order — and the order is not the same as the first draft's**
+
+1. **Per-subject encryption and key destruction (D4-c)** — the largest piece, and it has
+   to come first or not at all, because it cannot be retrofitted past the append-only
+   triggers and the hash chain. Deciding "later" is deciding "no".
+2. Data-flow and subprocessor map (backlog 6.2) — a prerequisite for D3, not a parallel
+   task, because subject audio already leaves the machine.
+3. Consent language covering recording, AI, subprocessors and the human alternative
+   (backlog 6.5) — blocking for D3-c, and IRB-facing.
+4. Audio capture and storage with a fixed destruction date (D3-c) — moderate.
+5. Withdrawal: a subject-level entity to hold the flag, a coordinator write path to set
+   it, and enforcement at verification (D6-b) — more than the afternoon I first said.
+6. Legal-hold flag (D5-b) — small, sequenced with the first purge job.
 
 ---
 
@@ -232,6 +300,8 @@ and builds it when it can bite, and blocks calls to withdrawn participants in co
   says, and which the site cannot override.
 - **Whether the IRB will accept audio retention at all**, which is a submission question,
   not an engineering one.
+- **What the ElevenLabs and browser-recogniser terms say about retention of the audio
+  they already receive**, which no decision in this document reaches. Backlog 6.2.
 
 ---
 
