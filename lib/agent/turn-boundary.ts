@@ -29,12 +29,42 @@
  * the whole family of near misses at once.
  */
 
-/** Role labels the model reaches for when it starts speaking as someone else. */
+/**
+ * Role labels the model reaches for when it starts speaking as someone else.
+ *
+ * Transcript conventions only. An earlier version also listed "you", "me" and
+ * "agent", which are ordinary English words: "Thank you.\nYou mentioned
+ * dizziness earlier" was cut mid-turn and its tool calls dropped. A label list
+ * has to contain things nobody says by accident.
+ */
 const ROLE_LABEL =
-  /\n[ \t]*(?:user|assistant|subject|patient|human|speaker|caller|participant|agent|you|me)\b/i;
+  /\n[ \t]*(?:user|assistant|subject|patient|human|speaker|caller|participant)\b/i;
 
-/** A blank line: the model changing speaker. */
-const BLANK_LINE = /\n[ \t]*\n/;
+/**
+ * A blank line with something after it: the model changing speaker.
+ *
+ * The trailing content is required. Matching a bare "\n\n" meant a turn that
+ * simply ended with a blank line before its tool calls — "Let me note that
+ * down.\n\n" then record_adverse_event — was read as a fabrication, so the
+ * adverse event was silently dropped and the audit trail recorded an invention
+ * that never happened. A guard against losing the record must not lose it.
+ */
+const BLANK_LINE = /\n[ \t]*\n[ \t]*(?=\S)/;
+
+/**
+ * A new line that resumes in lower case.
+ *
+ * The near misses do not always use a blank line: "...last spoke?\nuseKind of a
+ * mixed bag" has one newline and no label, so neither rule above sees it. What
+ * it does have is a line beginning in lower case, which genuine speech does not
+ * — the agent's turns are sentences, and sentences start capitalised.
+ *
+ * The trade is deliberate. If the model ever hard-wraps a sentence, this cuts it
+ * mid-question: the agent asks half a question, the turn ends, and the subject
+ * asks it to repeat. That is recoverable and it is audited. Letting the other
+ * case through puts words the subject never said into a regulated record.
+ */
+const LOWERCASE_RESUME = /\n[ \t]*(?=[a-z])/;
 
 /**
  * Index at which `text` stops being the agent's own turn, or -1.
@@ -43,28 +73,21 @@ const BLANK_LINE = /\n[ \t]*\n/;
  * speak, text from it onward is discarded.
  */
 export function findTurnBoundary(text: string): number {
-  const blank = text.search(BLANK_LINE);
-  const label = text.search(ROLE_LABEL);
-  if (blank === -1) return label;
-  if (label === -1) return blank;
-  return Math.min(blank, label);
+  const found = [BLANK_LINE, ROLE_LABEL, LOWERCASE_RESUME]
+    .map((re) => text.search(re))
+    .filter((i) => i !== -1);
+  return found.length === 0 ? -1 : Math.min(...found);
 }
 
 /**
  * How many trailing characters cannot be released yet, because they might be
  * the opening of a boundary that has not finished arriving.
  *
- * A trailing "\n" could become "\n\n"; a trailing "\nus" could become "\nuser".
- * Releasing either the moment it arrives would speak the first half of a
- * boundary and then discard the second, which is the exact shape of the "use"
- * fragments above reaching the loudspeaker.
+ * Only the newline and any indentation after it. Once one more character lands,
+ * the rules above can decide, so there is nothing to gain by holding further —
+ * and holding a partial word is what put "use" on the loudspeaker.
  */
-const MAX_HOLD = 16;
-
 export function pendingBoundaryPrefixLength(text: string): number {
-  // A newline, optional indentation, and at most one partial word after it.
-  const match = /\n[ \t]*[A-Za-z]*$/.exec(text);
-  if (!match) return 0;
-  // Past this length it is prose on a new line, not a label being typed.
-  return match[0].length <= MAX_HOLD ? match[0].length : 0;
+  const match = /\n[ \t]*$/.exec(text);
+  return match ? match[0].length : 0;
 }

@@ -45,19 +45,38 @@ test("a single wrapped newline is not a boundary", () => {
   assert.equal(findTurnBoundary("Thank you.\nHow have you been feeling?"), -1);
 });
 
-test("a half-arrived boundary is held back rather than spoken", () => {
-  // The exact sequence that leaked: the model had emitted "?\n\nuse" and the
-  // next token decided whether it was "user" or something else. Either way the
-  // fragment must not already be on its way to the speaker.
+test("a trailing newline is held until the next character decides it", () => {
   assert.ok(pendingBoundaryPrefixLength("...last spoke?\n") > 0);
-  assert.ok(pendingBoundaryPrefixLength("...last spoke?\n\nuse") > 0);
-  assert.ok(pendingBoundaryPrefixLength("...last spoke?\n\nus") > 0);
+  assert.ok(pendingBoundaryPrefixLength("...last spoke?\n  ") > 0);
   assert.equal(pendingBoundaryPrefixLength("...last spoke? Not held."), 0);
+  // Once a character has arrived the rules can decide, so nothing more is held.
+  assert.equal(pendingBoundaryPrefixLength("Thank you.\nHow have you been"), 0);
 });
 
-test("the hold-back releases prose rather than stalling on it", () => {
-  const long = "Thank you.\nSupercalifragilisticexpialidocious and then some";
-  assert.equal(pendingBoundaryPrefixLength(long), 0);
+test("a turn ending in a blank line is not a fabrication", () => {
+  // This was a real regression: a turn that ended with a blank line before its
+  // tool calls was read as invented speech, so the record_adverse_event call
+  // was dropped and the audit trail described an invention that never happened.
+  for (const t of ["Let me note that down.\n\n", "Okay.\n\n", "Thank you.\n"]) {
+    assert.equal(findTurnBoundary(t), -1, `false positive: ${JSON.stringify(t)}`);
+  }
+});
+
+test("ordinary words are not speaker labels", () => {
+  for (const t of [
+    "Thank you.\nYou mentioned dizziness earlier, is that still going on?",
+    "I understand.\nMe too.",
+  ]) {
+    assert.equal(findTurnBoundary(t), -1, `false positive: ${JSON.stringify(t)}`);
+  }
+});
+
+test("the single-newline variant is cut too", () => {
+  // Same family, one newline instead of two: no blank line and no label, so the
+  // first two rules never saw it and the whole invented reply was spoken.
+  const at = findTurnBoundary("...since we last spoke?\nuseKind of a mixed bag.");
+  assert.notEqual(at, -1);
+  assert.equal("...since we last spoke?\nuseKind of a mixed bag.".slice(0, at), "...since we last spoke?");
 });
 
 test("holding back never loses the agent's own words", () => {

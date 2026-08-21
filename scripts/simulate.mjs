@@ -485,10 +485,21 @@ function evaluate(expect, snapshot, flags, agentLines, notes = []) {
   if (truncations.length) notes.push(`fabrication attempts contained: ${truncations.length}`);
   // The residue of a half-released boundary: the agent speaking a bare fragment
   // of a role label — "use", "usual", "useard" — welded to the subject's words.
-  const fragment = /(^|[^a-z])(use|usual|user)(?=[A-Z0-9])/;
+  //
+  // Not a list of the fragments seen so far — "use", "usual", "useh", "useful",
+  // "useard", "useleven", "usen0" are all the same defect wearing a different
+  // spelling, and the next one will not be on the list either. What they share
+  // is position: the agent finishes its question and the next sentence begins in
+  // lower case, which its own speech never does. That is the check.
+  //
+  // "Do you use an inhaler?" does not match — "use" mid-sentence is ordinary
+  // English, and only a sentence *starting* lower-case is the defect. Clause
+  // fragments from the chunker's comma flush do not match either: they follow a
+  // comma, and this anchors on sentence-ending punctuation.
+  const fragment = /[?.!]["')\]]?\s+[a-z]/;
   const fragmentLine = agentLines.find((l) => fragment.test(l));
   add(
-    "spoke no role-label fragment",
+    "began every sentence in upper case",
     !fragmentLine,
     fragmentLine ? `"${fragmentLine.slice(0, 90)}…"` : "clean",
   );

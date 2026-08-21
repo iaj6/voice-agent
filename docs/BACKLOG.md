@@ -195,15 +195,31 @@ unexecuted rather than trusted; the turn then ends, because the next thing that
 belongs in the call is the subject answering. Each cut writes a `TURN_TRUNCATED`
 audit entry, so the behaviour is observable in production instead of silent.
 
-| | emergency persona, rounds clean |
+| | rounds clean |
 |---|---|
-| before | 2/6 |
-| after | 5/6, and 4/5 on a separate 5-round run |
+| before | emergency 2/6 |
+| after | **15/15** across all three fast personas, 0 failing assertions |
 
 Across 8 rounds the control fired **6 times** with zero fragments reaching the
 speaker. The model still attempts this constantly — the attempts are its
 behaviour, and the fix contains them rather than removing them, which is why the
 eval now reports the containment count instead of asserting it to zero.
+
+**The first version of this fix was worse than the bug in one respect**, and
+review caught it. Matching a bare `\n\n` meant a turn that merely ended with a
+blank line before its tool calls — *"Let me note that down."* then
+`record_adverse_event` — was read as a fabrication, so the adverse event was
+dropped unexecuted and the audit trail recorded an invention that never happened.
+A guard against losing the record was losing the record. The rule now requires
+content after the blank line. Five smaller faults came with it: `you`, `me` and
+`agent` were in the speaker-label list and are ordinary English, so *"Thank
+you.\nYou mentioned dizziness earlier"* was cut mid-turn; a tool call sitting
+*before* the fabrication was kept in history but never executed, leaving a
+`tool_use` with no `tool_result` and a 400 that would end the call rather than
+the turn; a turn cut before its first word left the participant in silence with a
+placeholder written into history as the agent's own words, where it is now
+retried instead; the single-newline variant escaped all three rules; and the
+audit entry's `discardedBlocks` was arithmetically always 0.
 
 **Residual, not closed:** roughly 1 round in 5 the agent repeats a question
 within one turn (*"And what is your date of birth? And what is your date of
@@ -214,8 +230,10 @@ different mechanism from the above. Worth a look during Sprint 5 observability.
 subject speech` check matched role labels (`user:`, `subject:`) and this
 fabrication carries none, so it reported *clean* on a transcript full of invented
 speech. Added: `asked one question per turn`, which encodes a rule the system
-prompt already states; `spoke no role-label fragment`, which catches the leaked
-residue directly; and `VOICE_AGENT_RAW=<file>`, which dumps raw SSE frames and
+prompt already states; `began every sentence in upper case`, which catches the
+leaked residue by position rather than by spelling — the first attempt listed the
+known fragments and detected one of five, missing `usual bit rough honestly`,
+which had been spoken aloud to a participant; and `VOICE_AGENT_RAW=<file>`, which dumps raw SSE frames and
 persona replies — the diagnosis above came straight out of it. `--repeat` also
 now prints a round that actually failed rather than whichever ran last; it was
 reporting a rate over a passing transcript, so the defect could only be seen by

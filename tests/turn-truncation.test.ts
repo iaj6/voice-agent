@@ -21,7 +21,7 @@ test("only what the agent actually said survives", () => {
       "Thank you. How have you been feeling since we last spoke?\n\nuseKind of a mixed bag.",
     ),
   ];
-  const kept = truncateFabricatedTurn(
+  const { content: kept } = truncateFabricatedTurn(
     raw,
     "Thank you. How have you been feeling since we last spoke?",
   );
@@ -31,12 +31,12 @@ test("only what the agent actually said survives", () => {
 });
 
 test("thinking blocks are preserved, because they must replay unchanged", () => {
-  const kept = truncateFabricatedTurn([thinking, text("Hello.\n\nuser: hi")], "Hello.");
+  const { content: kept } = truncateFabricatedTurn([thinking, text("Hello.\n\nuser: hi")], "Hello.");
   assert.equal(kept[0].type, "thinking");
 });
 
 test("a tool call after the fabrication is dropped, not executed", () => {
-  const kept = truncateFabricatedTurn(
+  const { content: kept } = truncateFabricatedTurn(
     [text("Thank you.\n\nuseI've been dizzy."), toolUse("record_adverse_event")],
     "Thank you.",
   );
@@ -46,14 +46,38 @@ test("a tool call after the fabrication is dropped, not executed", () => {
   );
 });
 
-test("a turn fabricated from its first token still yields a valid message", () => {
-  const kept = truncateFabricatedTurn([thinking, text("\n\nuser: I feel fine.")], "");
-  assert.ok(kept.some((b) => b.type === "text"), "the API rejects an empty assistant turn");
+test("a turn fabricated from its first token keeps nothing invented", () => {
+  // No placeholder stands in for the missing speech: the runner retries the
+  // turn instead. A parenthetical apology written into history is something the
+  // model reads back as its own words on the next pass.
+  const { content: kept } = truncateFabricatedTurn(
+    [thinking, text("\n\nuser: I feel fine.")],
+    "",
+  );
   const spoken = kept.map((b) => (b.type === "text" ? b.text : "")).join("");
-  assert.ok(!spoken.includes("I feel fine"), "the invention survived as the whole turn");
+  assert.equal(spoken, "", "invented text survived as the whole turn");
 });
 
 test("a turn with no text block is returned untouched", () => {
   const raw = [thinking, toolUse("verify_subject")];
-  assert.deepEqual(truncateFabricatedTurn(raw, ""), raw);
+  assert.deepEqual(truncateFabricatedTurn(raw, "").content, raw);
+});
+
+test("a tool call BEFORE the fabrication is dropped too", () => {
+  // Keeping it left an assistant tool_use with no tool_result behind it, and
+  // the turn ends before anything executes — the next request is rejected and
+  // the whole call dies, not just this turn.
+  const { content: kept } = truncateFabricatedTurn(
+    [toolUse("record_adverse_event"), text("Okay.\n\nuser: I feel fine.")],
+    "Okay.",
+  );
+  assert.ok(!kept.some((b) => b.type === "tool_use"));
+});
+
+test("the audit entry counts what was actually discarded", () => {
+  const { discarded } = truncateFabricatedTurn(
+    [text("Okay.\n\nuseI've been dizzy."), toolUse("record_adverse_event")],
+    "Okay.",
+  );
+  assert.equal(discarded, 1, "a dropped tool call was reported as nothing dropped");
 });

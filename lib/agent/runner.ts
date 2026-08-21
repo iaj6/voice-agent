@@ -72,6 +72,9 @@ function describeError(err: unknown): string {
 
 const MODEL = "claude-opus-5";
 const MAX_TOOL_ITERATIONS = 8;
+
+/** Retries when the model opens a turn speaking as the subject. */
+const MAX_EMPTY_CUTS = 2;
 /**
  * Voice turns are short by design. This is a ceiling against runaway output, not
  * a target — the system prompt is what keeps responses to a sentence or two.
@@ -223,27 +226,27 @@ function markSolicitedAsked(session: CheckInSession, spoken: string) {
 export function truncateFabricatedTurn(
   content: Anthropic.Beta.BetaContentBlock[],
   spoken: string,
-): Anthropic.Beta.BetaContentBlock[] {
+): { content: Anthropic.Beta.BetaContentBlock[]; discarded: number } {
   const at = content.findIndex((b) => b.type === "text");
-  if (at === -1) return content;
+  if (at === -1) return { content, discarded: 0 };
 
-  const kept = content.slice(0, at);
+  // Thinking is kept because it has to replay unchanged on the same model. Tool
+  // calls are not, wherever they sit in the turn: a turn that invented the
+  // subject's answer is not a turn whose tool arguments should be trusted, and
+  // the arguments are exactly where a fabricated verbatim enters the eCRF.
+  //
+  // Dropping a *leading* tool call also keeps the conversation valid. Keeping it
+  // left an assistant tool_use with no tool_result behind it — the turn ends
+  // before anything executes — and the next request is rejected outright, which
+  // ends the call rather than one turn of it.
+  const kept = content
+    .slice(0, at)
+    .filter((b) => b.type !== "tool_use");
+
   const trimmed = spoken.trim();
-  if (trimmed) {
-    kept.push({ type: "text", text: trimmed, citations: null });
-  }
+  if (trimmed) kept.push({ type: "text", text: trimmed, citations: null });
 
-  // The API rejects an assistant turn with no content at all. If the model
-  // fabricated from its very first token there is nothing genuine to keep, so
-  // say so rather than sending an empty turn.
-  if (!kept.some((b) => b.type === "text")) {
-    kept.push({
-      type: "text",
-      text: "(This turn was cut short and nothing was said.)",
-      citations: null,
-    });
-  }
-  return kept;
+  return { content: kept, discarded: content.length - kept.length };
 }
 
 /**
@@ -369,6 +372,8 @@ export async function* runTurn(
    */
   let emittedTextThisTurn = false;
   let spokenThisTurn = "";
+  /** Turns cut before a single word was said. Bounded so a stuck model ends. */
+  let emptyCuts = 0;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const chunker = new SentenceChunker();
@@ -409,7 +414,10 @@ export async function* runTurn(
     let fabricationCut = false;
 
     for (let attempt = 1; attempt <= MAX_STREAM_ATTEMPTS; attempt++) {
-      let held = "";
+      /** Everything the model has emitted this iteration. */
+      let raw = "";
+      /** How much of `raw` has been released to the speaker. */
+      let released = 0;
       fabricationCut = false;
       spokenThisIteration = "";
 
@@ -423,27 +431,32 @@ export async function* runTurn(
           ) {
             // Keep draining the stream once cut, but emit nothing more. The
             // remainder is the model's invention of the subject's reply.
+            raw += event.delta.text;
             if (fabricationCut) continue;
 
-            held += event.delta.text;
-
-            let text: string;
-            const boundary = findTurnBoundary(held);
+            // Searched against the whole turn so far, not just the unreleased
+            // tail. A boundary straddles a newline, and the newline is often
+            // released a beat before the character that gives it meaning
+            // arrives — searching only the tail loses exactly those.
+            let releasable: number;
+            const boundary = findTurnBoundary(raw);
             if (boundary !== -1) {
-              text = held.slice(0, boundary);
-              held = "";
+              releasable = boundary;
               fabricationCut = true;
             } else {
               // Whichever guard wants to hold more wins. A trailing "\n" is both
               // a possible stop sequence and a possible blank line, and releasing
               // it on one guard's say-so is how "use" reached the speaker.
-              const holdBack = Math.max(
-                pendingStopPrefixLength(held),
-                pendingBoundaryPrefixLength(held),
-              );
-              text = held.slice(0, held.length - holdBack);
-              held = held.slice(held.length - holdBack);
+              releasable =
+                raw.length -
+                Math.max(
+                  pendingStopPrefixLength(raw),
+                  pendingBoundaryPrefixLength(raw),
+                );
             }
+            if (releasable <= released) continue;
+            let text = raw.slice(released, releasable);
+            released = releasable;
             if (!text) continue;
 
             if (firstDeltaOfIteration && emittedTextThisTurn && !/^\s/.test(text)) {
@@ -466,11 +479,12 @@ export async function* runTurn(
         // Anything still held is only safe to release if generation ended for a
         // reason other than a stop sequence. If a sequence fired, the held text
         // is its opening and must never be spoken.
-        if (held && !fabricationCut && message.stop_reason !== "stop_sequence") {
+        const remainder = raw.slice(released);
+        if (remainder && !fabricationCut && message.stop_reason !== "stop_sequence") {
           const text =
-            firstDeltaOfIteration && emittedTextThisTurn && !/^\s/.test(held)
-              ? ` ${held}`
-              : held;
+            firstDeltaOfIteration && emittedTextThisTurn && !/^\s/.test(remainder)
+              ? ` ${remainder}`
+              : remainder;
           spokeThisTurn = true;
           emittedTextThisTurn = true;
           spokenThisTurn += text;
@@ -480,7 +494,7 @@ export async function* runTurn(
             yield { type: "speak", text: sentence };
           }
         }
-        held = "";
+        released = raw.length;
         break;
       } catch (err) {
         const retryable =
@@ -545,7 +559,8 @@ export async function* runTurn(
     // single turn.
     let content = message.content;
     if (fabricationCut) {
-      content = truncateFabricatedTurn(content, spokenThisIteration);
+      const cut = truncateFabricatedTurn(content, spokenThisIteration);
+      content = cut.content;
       session.audit.record({
         actor: "system",
         action: "TURN_TRUNCATED",
@@ -554,7 +569,7 @@ export async function* runTurn(
         after: {
           iteration,
           spoken: spokenThisIteration,
-          discardedBlocks: message.content.length - content.length,
+          discardedBlocks: cut.discarded,
           stopReason: message.stop_reason,
         },
         reason:
@@ -562,15 +577,44 @@ export async function* runTurn(
           "from that point was discarded and never spoken, recorded, or added to " +
           "the conversation. No tool call from this turn was executed.",
       });
+
+      // Cut before it said anything: the model opened the turn as the subject.
+      // Ending here would be silence on a live line with nobody told why, so the
+      // turn is retried instead. The failed attempt is not written to history —
+      // a placeholder standing in for speech is something the model reads back
+      // as its own words on the next pass.
+      if (!spokenThisIteration.trim()) {
+        emptyCuts += 1;
+        if (emptyCuts <= MAX_EMPTY_CUTS) {
+          yield { type: "state", snapshot: snapshot(session) };
+          continue;
+        }
+        session.audit.record({
+          actor: "system",
+          action: "TURN_FAILED",
+          entity: "CheckInSession",
+          entityId: session.id,
+          after: { iteration, emptyCuts },
+          reason:
+            "The model opened every attempt at this turn by speaking as the " +
+            "subject. Nothing was said and nothing was recorded; a coordinator " +
+            "should call this participant.",
+        });
+        await saveSession(session);
+        yield {
+          type: "error",
+          message:
+            "The assistant could not complete that turn. Escalating to a human " +
+            "coordinator.",
+        };
+        return;
+      }
     }
     session.messages.push({ role: "assistant", content });
 
     // A cut turn ends here. The agent asked its question; the next thing that
     // belongs in this call is the subject answering it, not another model pass.
-    if (fabricationCut) {
-      yield { type: "state", snapshot: snapshot(session) };
-      break;
-    }
+    if (fabricationCut) break;
 
     const toolUses = content.filter(
       (block): block is Anthropic.Beta.BetaToolUseBlock =>
