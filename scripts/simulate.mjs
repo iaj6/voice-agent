@@ -33,6 +33,51 @@ import Anthropic from "@anthropic-ai/sdk";
 import { appendFileSync } from "node:fs";
 
 const BASE = process.env.VOICE_AGENT_URL ?? "http://localhost:3100";
+
+/**
+ * What a run costs, in dollars per million tokens.
+ *
+ * The runner has always emitted usage on every turn and this harness threw it
+ * away, so "what does an eval cost" was unanswerable — which mattered, because
+ * model spend is the only cost in this project that actually accrues. Storage is
+ * megabytes and the database is inside a free tier.
+ *
+ * Rates are Claude Opus 5 list price. Cache reads bill at a tenth of input,
+ * cache writes at 1.25x, which is why both are counted separately rather than
+ * folded into input.
+ */
+const PRICE_PER_MTOK = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+
+function emptyUsage() {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
+}
+
+function addUsage(into, u) {
+  into.input += u.input ?? 0;
+  into.output += u.output ?? 0;
+  into.cacheRead += u.cacheRead ?? 0;
+  into.cacheWrite += u.cacheWrite ?? 0;
+  into.calls += 1;
+}
+
+function costOf(u) {
+  return (
+    (u.input * PRICE_PER_MTOK.input +
+      u.output * PRICE_PER_MTOK.output +
+      u.cacheRead * PRICE_PER_MTOK.cacheRead +
+      u.cacheWrite * PRICE_PER_MTOK.cacheWrite) /
+    1_000_000
+  );
+}
+
+const money = (n) => (n < 0.01 ? `${(n * 100).toFixed(2)}¢` : `$${n.toFixed(2)}`);
+
+/**
+ * Split on purpose. The agent is the thing under test; the persona is the test
+ * harness role-playing a participant. Reporting one number hides that a
+ * meaningful share of the bill is the fixture, not the system.
+ */
+const SPEND = { agent: emptyUsage(), persona: emptyUsage() };
 const DEFAULT_MAX_TURNS = 26;
 const DEFAULT_CONCURRENCY = 3;
 const client = new Anthropic();
@@ -251,7 +296,14 @@ async function agentTurn(sessionId, utterance, source, verbose, log = () => {}) 
       } catch {
         continue;
       }
-      if (ev.type === "speak") spoken.push(ev.text);
+      if (ev.type === "usage") {
+        addUsage(SPEND.agent, {
+          input: ev.inputTokens,
+          output: ev.outputTokens,
+          cacheRead: ev.cacheReadTokens,
+          cacheWrite: ev.cacheWriteTokens,
+        });
+      } else if (ev.type === "speak") spoken.push(ev.text);
       else if (ev.type === "tool_call") {
         tools.push(ev.name);
         if (verbose) log("   " + C.tool(`→ ${ev.name}`));
@@ -300,6 +352,13 @@ async function patientReply(personaBrief, history) {
         content: `Call transcript so far:\n\n${transcript}\n\nWhat do you say next?`,
       },
     ],
+  });
+
+  addUsage(SPEND.persona, {
+    input: message.usage.input_tokens,
+    output: message.usage.output_tokens,
+    cacheRead: message.usage.cache_read_input_tokens ?? 0,
+    cacheWrite: message.usage.cache_creation_input_tokens ?? 0,
   });
 
   const reply = message.content
@@ -779,6 +838,45 @@ console.log(
   `\n  ${totalChecks - totalFailed}/${totalChecks} assertions · ${wall}s wall clock ` +
     C.dim(`(${serial}s if run serially)`),
 );
+
+const agentCost = costOf(SPEND.agent);
+const personaCost = costOf(SPEND.persona);
+const totalCost = agentCost + personaCost;
+const tok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
+
+if (SPEND.agent.calls + SPEND.persona.calls > 0) {
+  console.log(`\n${C.bold("━━ spend")}`);
+  for (const [label, u, c] of [
+    ["agent   ", SPEND.agent, agentCost],
+    ["personas", SPEND.persona, personaCost],
+  ]) {
+    console.log(
+      `  ${label} ${String(u.calls).padStart(4)} calls  ` +
+        C.dim(
+          `in ${tok(u.input)} · out ${tok(u.output)} · ` +
+            `cache r ${tok(u.cacheRead)} / w ${tok(u.cacheWrite)}`,
+        ) +
+        `  ${money(c)}`,
+    );
+  }
+  const cacheable = SPEND.agent.cacheRead + SPEND.agent.input;
+  const hitRate = cacheable > 0 ? (SPEND.agent.cacheRead / cacheable) * 100 : 0;
+  const calls = SPEND.agent.calls + SPEND.persona.calls;
+  console.log(
+    `  ${C.bold("total")}    ${String(calls).padStart(4)} calls  ` +
+      C.dim(`prompt cache hit ${hitRate.toFixed(0)}% on the agent`) +
+      `  ${C.bold(money(totalCost))}`,
+  );
+  if (repeat > 1) {
+    console.log(C.dim(`  ${money(totalCost / repeat)} per round · ${repeat} rounds`));
+  }
+  console.log(
+    C.dim(
+      `  Opus 5 list price. The personas are the harness, not the system — ` +
+        `${((personaCost / (totalCost || 1)) * 100).toFixed(0)}% of this run was the fixture.`,
+    ),
+  );
+}
 
 if (repeat > 1) {
   console.log(`\n${C.bold("━━ stability")}  ${C.dim(`${repeat} rounds`)}`);

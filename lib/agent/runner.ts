@@ -169,7 +169,13 @@ export type AgentEvent =
   | { type: "tool_call"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; name: string; result: unknown; isError: boolean }
   | { type: "state"; snapshot: ReturnType<typeof snapshot> }
-  | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens: number }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+    }
   | { type: "done"; terminal: boolean }
   | { type: "error"; message: string };
 
@@ -537,6 +543,9 @@ export async function* runTurn(
       inputTokens: message.usage.input_tokens,
       outputTokens: message.usage.output_tokens,
       cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+      // Billed at a premium over ordinary input, so leaving it out understates
+      // the bill rather than rounding it.
+      cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
     };
 
     if (message.stop_reason === "refusal") {

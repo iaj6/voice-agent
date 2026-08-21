@@ -36,8 +36,27 @@ export const maxDuration = 300;
 
 const LOG_DIR = path.join(process.cwd(), ".spike-logs");
 
+/**
+ * Whether to write raw request bodies to disk.
+ *
+ * Off unless asked for, and refused outright in production. This logging existed
+ * to observe the ElevenLabs contract rather than assume it, and it did its job —
+ * but what it writes is the entire conversation, in plaintext, appended forever,
+ * with no rotation and no encryption. It is gitignored, so nothing in a code
+ * review would ever surface it, and it sits outside every retention control the
+ * rest of the system has: a team could crypto-shred the database, report a
+ * subject's data destroyed, and be wrong because of this file.
+ *
+ * A spike artefact that outlives its spike stops being a diagnostic and becomes
+ * an unmanaged store of somebody's medical history. See docs/RETENTION.md §1.
+ */
+const SPIKE_LOGGING =
+  process.env.VOICE_AGENT_SPIKE_LOG === "1" &&
+  process.env.NODE_ENV !== "production";
+
 /** Records exactly what ElevenLabs sends, so the contract is observed not assumed. */
 async function logPayload(label: string, body: unknown) {
+  if (!SPIKE_LOGGING) return;
   try {
     await mkdir(LOG_DIR, { recursive: true });
     await appendFile(

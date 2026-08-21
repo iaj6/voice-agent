@@ -27,8 +27,8 @@ than the architecture suggests.**
 | Verbatim symptom descriptions | `record.adverseEvents[].verbatimTerm`, `messages` | Free text, potentially identifying |
 | Full conversation transcript | `check_in_session.messages` | Free text |
 | **A second full transcript** | `audit_entry.after_value`, one row per utterance | Free text, **in the table that rejects DELETE** |
-| **Raw request bodies** | `.spike-logs/elevenlabs-requests.jsonl` | **Full conversation, plaintext, unmanaged** |
-| Synthesised agent speech | `.speech-cache/*.mp3` | **Yes, when the agent reads symptoms back** |
+| Raw request bodies | `.spike-logs/elevenlabs-requests.jsonl` | Full conversation, plaintext — *logging now off by default* |
+| Synthesised agent speech | `.speech-cache/*.mp3` | *Fixed instrument wording only, as of this revision* |
 
 **The date of birth is free text in three places.** Verification asks for it out loud, so
 the answer lands in `messages`, `subjectUtterances`, and — because the audit trail records
@@ -42,20 +42,20 @@ values of eCRF writes: `runTurn` records every subject utterance verbatim as
 its sessions are referenced `on delete restrict`. This single fact decides more of the
 document than anything else in it — see D4.
 
-**There is an unmanaged plaintext transcript store on disk.** The OpenAI-compatible route
-logs every request body to `.spike-logs/elevenlabs-requests.jsonl`, which means the whole
-conversation history, appended, never rotated, unencrypted. It exists on the development
-machine now with 30 entries, 7 containing a date-of-birth-shaped string. It is gitignored,
-so no repository-level review would ever see it, and it sits outside every mechanism this
-document proposes. **Left as it is, a team could crypto-shred the database, report the
-subject's data destroyed, and be wrong.**
+**There was an unmanaged plaintext transcript store on disk.** The OpenAI-compatible route
+logged every request body to `.spike-logs/elevenlabs-requests.jsonl` — the whole
+conversation history, appended, never rotated, unencrypted. 30 entries on the development
+machine, 7 containing a date-of-birth-shaped string. Gitignored, so no repository-level
+review would ever have seen it, and outside every mechanism this document proposes.
+**Left as it was, a team could have crypto-shredded the database, reported the subject's
+data destroyed, and been wrong.** Now off unless explicitly enabled — see below.
 
-**The speech cache is not impersonal.** The agent is instructed to read back what it
-recorded, and every synthesised sentence is cached — there is no filter limiting it to the
-fixed instrument wording. So a subject's own symptom description, rendered as audio, is
+**The speech cache was not impersonal either.** The agent is instructed to read back what
+it recorded, and every synthesised sentence was cached with no filter limiting it to the
+fixed instrument wording — so a subject's own symptom description, rendered as audio, was
 written permanently to `.speech-cache`. Worse for deletion: the filename is a hash of the
-text, so a given subject's audio cannot be located without already knowing the exact string
-that produced it.
+text, so a given subject's audio could not be located without already knowing the exact
+string that produced it. Ten such files were on disk. Now restricted — see below.
 
 **No subject audio is stored by this system — but subject audio does leave the machine.**
 That distinction was collapsed in the first draft and it matters, because a retention
@@ -67,21 +67,25 @@ reach ElevenLabs."* Retention of that audio is governed by a subprocessor's term
 anything decided here. **Backlog 6.2, the data-flow and subprocessor map, is a prerequisite
 for D3 rather than a parallel task.**
 
-### Fix regardless of what you decide
+### Fixed regardless of the decisions
 
-Three of the above are not policy questions. They are uncontrolled stores of subject
-content that no option below would govern, and they should be dealt with whichever way the
-decisions go:
+Three of the above were not policy questions but uncontrolled stores of subject content
+that no option below would govern. Two are now closed:
 
-1. **`.spike-logs`** — a spike artefact that outlived the spike. Disable the logging, or
-   gate it behind an explicit development-only flag and exclude it from any environment a
-   participant ever reaches.
-2. **`.speech-cache`** — restrict caching to the fixed instrument wording, which is the
-   only text the cache exists to make fast anyway. Everything else is a one-off sentence
-   whose cache hit rate is near zero and whose contents are the subject's.
-3. **`audit_entry` holding a verbatim transcript** — defensible, and arguably correct for a
-   regulated trail, but it should be a decision rather than a side effect. It is the reason
-   D1-a is not available.
+1. **`.spike-logs` — done.** Raw request-body logging is off unless
+   `VOICE_AGENT_SPIKE_LOG=1` is set, and refused outright when `NODE_ENV=production`. A
+   spike artefact that outlives its spike stops being a diagnostic and becomes an
+   unmanaged store of somebody's medical history. *(The existing file is still on disk;
+   it holds fixture data only, and removing it is a one-line decision left to the owner.)*
+2. **`.speech-cache` — done.** Only the fixed instrument wording is written to disk now,
+   which is the only text a second call ever asks for again. **Ten of the 37 cached files
+   were subject-derived**, 168 KB of the agent reading back non-scripted sentences; they
+   have been deleted. The allowlist moved into `lib/voice/speech-cache.ts` and is covered
+   by a test, because re-broadening it would look like a performance improvement and read
+   like one in a diff.
+3. **`audit_entry` holding a verbatim transcript — still open, and deliberately.**
+   Defensible, and arguably correct for a regulated trail, but it should be a decision
+   rather than a side effect. It is the reason D1-a is not available.
 
 ## 2. The floor and the ceiling
 

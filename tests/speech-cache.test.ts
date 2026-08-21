@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { speechCacheKey } from "../lib/voice/speech-cache.ts";
+import { cacheableUnits, speechCacheKey } from "../lib/voice/speech-cache.ts";
 
 const BASE = {
   modelId: "eleven_flash_v2_5",
@@ -45,4 +45,41 @@ test("key is a hex sha256 and leaks no source text", () => {
   const key = speechCacheKey(LINE, BASE);
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.ok(!key.includes("nausea"));
+});
+
+/**
+ * The cache allowlist is a privacy control now, not only a latency one.
+ *
+ * It used to write every synthesised sentence to disk. The agent is instructed
+ * to read back what it recorded, so a subject's own symptom description was
+ * being persisted as audio under a filename that is a hash of the text — which
+ * meant it could not be found again without already knowing the exact words the
+ * subject used. Ten such files were on disk when this was found.
+ *
+ * Guarded by a test because the failure mode is silent: broadening the cache
+ * back out would look like a performance improvement and read like one in a
+ * diff.
+ */
+test("only the fixed instrument wording is cacheable", () => {
+  const units = cacheableUnits();
+
+  assert.ok(units.size > 0, "nothing is cacheable, so the cache is dead");
+
+  // Every scripted question the protocol pins, as the runtime asks for it.
+  assert.ok(
+    units.has("And what is your date of birth?"),
+    "a fixed instrument line is not cacheable, so the cache does nothing useful",
+  );
+
+  // Anything the model composed for this subject, on this call.
+  for (const improvised of [
+    "I understand, and I'm noting the dizziness you described on Tuesday.",
+    "So that's the fatigue, the nausea, and the numbness in your left hand.",
+    "Thank you for telling me about your daughter driving you to the hospital.",
+  ]) {
+    assert.ok(
+      !units.has(improvised),
+      `subject-derived speech is cacheable and would be written to disk: ${improvised}`,
+    );
+  }
 });

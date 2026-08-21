@@ -6,9 +6,7 @@ import {
   VOICE_ID,
   VOICE_SETTINGS,
 } from "@/lib/voice/tts-config";
-import { speechCacheKey } from "@/lib/voice/speech-cache";
-import { FIXED_LINES } from "@/lib/agent/fixed-speech";
-import { SentenceChunker } from "@/lib/agent/sentence-chunker";
+import { cacheableUnits, speechCacheKey } from "@/lib/voice/speech-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,14 +66,7 @@ async function writeCache(key: string, audio: Buffer): Promise<void> {
  * only way the two stay aligned.
  */
 export async function GET() {
-  const units = new Set<string>();
-  for (const line of FIXED_LINES) {
-    const chunker = new SentenceChunker();
-    for (const sentence of chunker.push(line)) units.add(sentence);
-    const trailing = chunker.flush();
-    if (trailing) units.add(trailing);
-  }
-  return Response.json({ lines: [...units] });
+  return Response.json({ lines: [...cacheableUnits()] });
 }
 
 export async function POST(request: Request) {
@@ -154,7 +145,18 @@ export async function POST(request: Request) {
   }
 
   const audio = Buffer.from(await upstream.arrayBuffer());
-  await writeCache(key, audio);
+  // Only the fixed instrument wording is written to disk.
+  //
+  // The cache existed to make the scripted questions fast, and those are the only
+  // strings a second call ever asks for again — everything else is a one-off
+  // sentence with a cache hit rate of about zero. It was caching all of it, and
+  // the agent is instructed to read back what it recorded, so a subject's own
+  // symptom description was being written to disk as audio. Nothing could find it
+  // afterwards either: the filename is a hash of the text, so locating one
+  // subject's audio required already knowing the exact words they used.
+  if (cacheableUnits().has(text.trim())) {
+    await writeCache(key, audio);
+  }
 
   return new Response(new Uint8Array(audio), {
     headers: {
