@@ -62,7 +62,7 @@ gap more expensive to close.
 | 1.3 | Audit trail persisted append-only | B | Chain verifies across a restart; no update path exists in the schema | **done** |
 | 1.4 | Mid-call recovery on redial | B | A dropped call resumes with prior captures present | **done** |
 | 1.5 | Idempotency keys on every eCRF write | B | Replaying a turn produces no duplicate event | **done** |
-| 1.6 | Retention and legal-hold posture documented | C | Reviewed | todo |
+| 1.6 | Retention and legal-hold posture documented | C | Reviewed | **options written — [RETENTION.md](RETENTION.md), awaiting decision** |
 | 1.7 | **Verbatim provenance check on every eCRF write** | B | A tool call whose verbatim text does not appear in the subject's actual transcript is rejected | **done** |
 | 1.8 | Versioned migrations | A | Schema changes are ordered and replayable, not idempotent DDL | **done** |
 
