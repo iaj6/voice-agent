@@ -4,6 +4,10 @@ import { SYSTEM_PROMPT } from "./system-prompt.ts";
 import { TOOLS, executeTool } from "./tools.ts";
 import { SentenceChunker } from "./sentence-chunker.ts";
 import {
+  findTurnBoundary,
+  pendingBoundaryPrefixLength,
+} from "./turn-boundary.ts";
+import {
   assertedHits,
   highestUrgency,
   scanForSafetySignals,
@@ -205,6 +209,44 @@ function markSolicitedAsked(session: CheckInSession, spoken: string) {
 }
 
 /**
+ * Rebuilds a cut turn from only the part the agent genuinely said.
+ *
+ * Blocks before the offending text are kept — thinking has to be replayed
+ * unchanged on the same model, and anything earlier in the turn was produced
+ * before the model lost the thread. Everything from the fabrication onward goes,
+ * tool calls included: a turn that invented the subject's answer is not a turn
+ * whose tool arguments should be trusted, and the arguments are exactly where a
+ * fabricated verbatim would enter the eCRF. Nothing is executed, so a lost call
+ * costs a re-record on the next turn — the trade the other direction is a
+ * falsified record.
+ */
+export function truncateFabricatedTurn(
+  content: Anthropic.Beta.BetaContentBlock[],
+  spoken: string,
+): Anthropic.Beta.BetaContentBlock[] {
+  const at = content.findIndex((b) => b.type === "text");
+  if (at === -1) return content;
+
+  const kept = content.slice(0, at);
+  const trimmed = spoken.trim();
+  if (trimmed) {
+    kept.push({ type: "text", text: trimmed, citations: null });
+  }
+
+  // The API rejects an assistant turn with no content at all. If the model
+  // fabricated from its very first token there is nothing genuine to keep, so
+  // say so rather than sending an empty turn.
+  if (!kept.some((b) => b.type === "text")) {
+    kept.push({
+      type: "text",
+      text: "(This turn was cut short and nothing was said.)",
+      citations: null,
+    });
+  }
+  return kept;
+}
+
+/**
  * Runs one conversational turn: safety scan, then the model/tool loop, streaming
  * events as they happen.
  */
@@ -331,6 +373,8 @@ export async function* runTurn(
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const chunker = new SentenceChunker();
     let firstDeltaOfIteration = true;
+    /** What this iteration actually released to the speaker, unpadded. */
+    let spokenThisIteration = "";
 
     const params = {
       model: MODEL,
@@ -361,9 +405,13 @@ export async function* runTurn(
     // after that a retry would make the agent repeat itself mid-sentence.
     let message: Anthropic.Beta.BetaMessage | null = null;
     let spokeThisTurn = false;
+    /** Set when the model started speaking as the subject and was cut off. */
+    let fabricationCut = false;
 
     for (let attempt = 1; attempt <= MAX_STREAM_ATTEMPTS; attempt++) {
       let held = "";
+      fabricationCut = false;
+      spokenThisIteration = "";
 
       try {
         const stream = client.beta.messages.stream(params);
@@ -373,10 +421,29 @@ export async function* runTurn(
             event.type === "content_block_delta" &&
             event.delta.type === "text_delta"
           ) {
+            // Keep draining the stream once cut, but emit nothing more. The
+            // remainder is the model's invention of the subject's reply.
+            if (fabricationCut) continue;
+
             held += event.delta.text;
-            const holdBack = pendingStopPrefixLength(held);
-            let text = held.slice(0, held.length - holdBack);
-            held = held.slice(held.length - holdBack);
+
+            let text: string;
+            const boundary = findTurnBoundary(held);
+            if (boundary !== -1) {
+              text = held.slice(0, boundary);
+              held = "";
+              fabricationCut = true;
+            } else {
+              // Whichever guard wants to hold more wins. A trailing "\n" is both
+              // a possible stop sequence and a possible blank line, and releasing
+              // it on one guard's say-so is how "use" reached the speaker.
+              const holdBack = Math.max(
+                pendingStopPrefixLength(held),
+                pendingBoundaryPrefixLength(held),
+              );
+              text = held.slice(0, held.length - holdBack);
+              held = held.slice(held.length - holdBack);
+            }
             if (!text) continue;
 
             if (firstDeltaOfIteration && emittedTextThisTurn && !/^\s/.test(text)) {
@@ -386,6 +453,7 @@ export async function* runTurn(
             spokeThisTurn = true;
             emittedTextThisTurn = true;
             spokenThisTurn += text;
+            spokenThisIteration += text;
             yield { type: "delta", text };
             for (const sentence of chunker.push(text)) {
               yield { type: "speak", text: sentence };
@@ -398,7 +466,7 @@ export async function* runTurn(
         // Anything still held is only safe to release if generation ended for a
         // reason other than a stop sequence. If a sequence fired, the held text
         // is its opening and must never be spoken.
-        if (held && message.stop_reason !== "stop_sequence") {
+        if (held && !fabricationCut && message.stop_reason !== "stop_sequence") {
           const text =
             firstDeltaOfIteration && emittedTextThisTurn && !/^\s/.test(held)
               ? ` ${held}`
@@ -406,6 +474,7 @@ export async function* runTurn(
           spokeThisTurn = true;
           emittedTextThisTurn = true;
           spokenThisTurn += text;
+          spokenThisIteration += text;
           yield { type: "delta", text };
           for (const sentence of chunker.push(text)) {
             yield { type: "speak", text: sentence };
@@ -467,9 +536,43 @@ export async function* runTurn(
 
     // Echo the assistant turn back verbatim — thinking blocks included, since
     // they must be replayed unchanged on the same model.
-    session.messages.push({ role: "assistant", content: message.content });
+    //
+    // Except when the model started speaking as the subject. Then the invented
+    // text is stripped before the turn is echoed, because history is what the
+    // model reads as established fact on its next turn: left in, one fabricated
+    // line becomes a fabricated call, with the agent answering questions it
+    // asked itself. That is how a whole conversation once arrived inside a
+    // single turn.
+    let content = message.content;
+    if (fabricationCut) {
+      content = truncateFabricatedTurn(content, spokenThisIteration);
+      session.audit.record({
+        actor: "system",
+        action: "TURN_TRUNCATED",
+        entity: "CheckInSession",
+        entityId: session.id,
+        after: {
+          iteration,
+          spoken: spokenThisIteration,
+          discardedBlocks: message.content.length - content.length,
+          stopReason: message.stop_reason,
+        },
+        reason:
+          "The model began generating the subject's side of the call. Everything " +
+          "from that point was discarded and never spoken, recorded, or added to " +
+          "the conversation. No tool call from this turn was executed.",
+      });
+    }
+    session.messages.push({ role: "assistant", content });
 
-    const toolUses = message.content.filter(
+    // A cut turn ends here. The agent asked its question; the next thing that
+    // belongs in this call is the subject answering it, not another model pass.
+    if (fabricationCut) {
+      yield { type: "state", snapshot: snapshot(session) };
+      break;
+    }
+
+    const toolUses = content.filter(
       (block): block is Anthropic.Beta.BetaToolUseBlock =>
         block.type === "tool_use",
     );

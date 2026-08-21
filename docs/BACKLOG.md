@@ -153,38 +153,73 @@ produces it.*
 
 ---
 
-## Open defect — the agent stacks questions and part-fabricates a turn
+## Closed — the model speaks as the subject, and stop sequences did not stop it
 
-**Measured 2026-08-20. Pre-existing; present identically before and after the
-1.4/1.5 review fixes, so this is not a regression from them.**
+**Diagnosed and fixed 2026-08-21.**
 
-`emergency` persona, `--repeat=6`: **2/6 rounds clean, on both sides of the diff.**
-The failing turns look like this:
+The agent asks a question and, instead of stopping, writes the answer it expects
+and carries on — its reply, another question, another answer. In the worst round
+observed, a single turn contained the rest of the call. **Nothing the subject
+"said" in that stretch passed through the deterministic safety net, because the
+subject never said it.** That round recorded two adverse events and the net never
+fired.
 
-> *"Thank you. And what is your date of birth? Sorry, could you tell me your date of…"*
+`stop_sequences` were the existing defence and they are the wrong shape of
+control for this. They match exact strings; the model produces near misses. Four
+captured from raw deltas in one six-round run:
 
-and, in the worst round observed, a single agent turn containing the whole rest of
-the call — its question, the subject's answer, its reply, another question, another
-answer. **Nothing the subject "said" in that turn passed through the deterministic
-safety net, because the subject never said it.** That round recorded two adverse
-events and the net never fired.
+```
+"...since we last spoke?\n\nuseleven Pretty rough, honestly."
+"...since we last spoke?\n\nuseparse_ai_response\nPretty rough,"
+"...since we last spoke?\n\nuseKind of a mixed bag."
+"...happened again since Saturday night?\n\nusen0, just that once"
+```
 
-This was invisible until now. The eval's `did not fabricate subject speech` check
-matches `user:` / `subject:` style role labels, and this fabrication carries no
-labels at all — it is flowing prose. The check reported *clean* on a transcript
-full of invented subject speech. Two instrument fixes went in alongside this
-entry: an `asked one question per turn` assertion, which encodes a rule the system
-prompt already states and catches the stacked-question form directly, and
-`--repeat` now prints a round that actually failed instead of whichever ran last
-(it was reporting a rate over a passing transcript, so the defect could only be
-seen by re-running until it landed in the final round).
+None is `"\nuser"`, so none stopped anything. Earlier rounds produced `usual`,
+`useh`, `useful`, `useard` — the same failure in a different spelling each time,
+which is why patching the list kept appearing to work and kept not working.
 
-Not yet diagnosed: whether the extra iteration comes from `stop_reason:
-"stop_sequence"` being treated as a continuable turn. Stop sequences are catching
-the fabrication — that part works — but the turn appears to resume afterwards
-rather than ending and waiting for the subject. **Sprint 3 candidate, and it
-outranks coverage work: this is the failure mode item 1.7 exists to contain, and
-it is still live.**
+Two things were wrong beyond the leak itself. The half-matched prefix `use` was
+released to the speaker, because the hold-back only knew about exact sequences.
+And the fabricated text was pushed into `session.messages` verbatim, so on the
+next turn the model read its own invention as established fact — that is how one
+invented line became an invented call.
+
+**Fixed structurally, not with a longer list.** Every instance shares a shape: a
+blank line, then a new speaker. `lib/agent/turn-boundary.ts` cuts there. The
+agent has no legitimate reason to emit a blank line — it is told to speak one or
+two sentences with no lists, headings or markdown, and everything it produces is
+read aloud, where a blank line means nothing. From the boundary on, the text is
+never spoken, never entered into history, and any tool call after it is dropped
+unexecuted rather than trusted; the turn then ends, because the next thing that
+belongs in the call is the subject answering. Each cut writes a `TURN_TRUNCATED`
+audit entry, so the behaviour is observable in production instead of silent.
+
+| | emergency persona, rounds clean |
+|---|---|
+| before | 2/6 |
+| after | 5/6, and 4/5 on a separate 5-round run |
+
+Across 8 rounds the control fired **6 times** with zero fragments reaching the
+speaker. The model still attempts this constantly — the attempts are its
+behaviour, and the fix contains them rather than removing them, which is why the
+eval now reports the containment count instead of asserting it to zero.
+
+**Residual, not closed:** roughly 1 round in 5 the agent repeats a question
+within one turn (*"And what is your date of birth? And what is your date of
+birth?"*). Milder — irritating rather than a data-integrity failure — and a
+different mechanism from the above. Worth a look during Sprint 5 observability.
+
+**Instrument fixes that made this findable.** The eval's `did not fabricate
+subject speech` check matched role labels (`user:`, `subject:`) and this
+fabrication carries none, so it reported *clean* on a transcript full of invented
+speech. Added: `asked one question per turn`, which encodes a rule the system
+prompt already states; `spoke no role-label fragment`, which catches the leaked
+residue directly; and `VOICE_AGENT_RAW=<file>`, which dumps raw SSE frames and
+persona replies — the diagnosis above came straight out of it. `--repeat` also
+now prints a round that actually failed rather than whichever ran last; it was
+reporting a rate over a passing transcript, so the defect could only be seen by
+re-running until it happened to land in the final round.
 
 ---
 

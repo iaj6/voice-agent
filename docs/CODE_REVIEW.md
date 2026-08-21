@@ -78,10 +78,22 @@ proof that it did is to break the rule on purpose and watch the test fail.
   its next question, and reach "goodbye" in a single turn.
 - Fabricated speech then reached the eCRF: an adverse event recorded from words no
   subject spoke.
+- `stop_sequences` were the whole defence against it, and they are an exact-match
+  list against a model that produces near misses — `useleven`,
+  `useparse_ai_response`, `usen0`, and earlier `usual`, `useh`, `useful`. Every
+  extension of the list looked like it worked and none of them did. Replaced by a
+  rule about the shape of the failure — a blank line is where a turn ends — which
+  takes the whole family at once.
 
 **Ask:** does this change create pressure to produce a value the model does not have? An
 instruction not to fabricate is weaker than a design with nothing to gain from it. Prefer
 recording one thing at the moment it is known over batching.
+
+**And ask:** is the control a list of the cases seen so far, or a rule about the shape of
+the failure? A list is a record of what has already gone wrong, and the model will
+produce a case that is not on it. When a control can only be a list, log every time it
+fires — a rate you can watch is the difference between a control that works and one that
+stopped working quietly.
 
 ### 4. A control is correct at the boundary and leaks past it
 
