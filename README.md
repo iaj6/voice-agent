@@ -416,7 +416,7 @@ Test identities: `001-0042` / `1958-03-11`, `001-0055` / `1971-11-02`, `002-0013
 | `ESCALATION_EMAIL_TO` | — | Where escalations go. Absent is a delivery failure, not a default |
 | `ESCALATION_EMAIL_SECONDARY` | — | Backup contact, paged when the primary lets the response window close |
 | `ESCALATION_EMAIL_ALARM` | primary | Where the alarm goes when the ladder runs out |
-| `ESCALATION_SWEEP_SECRET` | — | Bearer token for `POST /api/escalation/sweep` and `/digest`. Unset means they refuse to run |
+| `ESCALATION_SWEEP_SECRET` | — | Bearer token for the sweep and digest endpoints. `CRON_SECRET` (which Vercel injects) is also accepted; unset means they refuse to run |
 | `VOICE_AGENT_CALL_WINDOW` | always open | When the agent will take a call, e.g. `Mon-Fri 09:00-17:00 America/New_York`. Outside it, `POST /api/session` returns 503 with a reopen time. Unset is correct for development and wrong for a deployment that takes real calls |
 | `VOICE_AGENT_PUBLIC_URL` | `VOICE_AGENT_URL` | Base URL used in acknowledgement links |
 | `VOICE_AGENT_SPIKE_LOG` | off | `1` writes raw request bodies to `.spike-logs` — whole conversations in plaintext. Dev only; refused in production |

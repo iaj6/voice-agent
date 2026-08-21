@@ -317,6 +317,7 @@ test("a store failure is a recorded delivery failure, not a thrown error", async
     overdue: async () => [],
     attemptsFor: async () => 0,
     openLadder: async () => [],
+    unacknowledged: async () => [],
   });
 
   const out = await executeTool(session, "escalate_to_coordinator", ESCALATE);

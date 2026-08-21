@@ -4,6 +4,7 @@ import { siteCountryForPrefix } from "@/lib/clinical/protocol";
 import { runTurn } from "@/lib/agent/runner";
 import {
   createSession,
+  ServiceClosedError,
   getSession,
   snapshot,
   type CheckInSession,
@@ -244,7 +245,42 @@ export async function POST(request: Request) {
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   const utterance = (lastUser?.content ?? "").trim();
 
-  const session = await resolveSession(body);
+  let session: CheckInSession;
+  try {
+    session = await resolveSession(body);
+  } catch (err) {
+    // Closed. This is a phone call, so the answer has to be spoken rather than
+    // returned as an error code nobody hears.
+    if (err instanceof ServiceClosedError) {
+      const closedId = `chatcmpl-closed-${Date.now()}`;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          controller.enqueue(
+            enc.encode(
+              `data: ${JSON.stringify(
+                sseChunk(closedId, model, {
+                  content:
+                    `${err.message} If this is an emergency, please call your local ` +
+                    "emergency number now. Otherwise please call your study site " +
+                    "directly, or call us back then. Goodbye.",
+                }),
+              )}\n\n`,
+            ),
+          );
+          controller.enqueue(enc.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    throw err;
+  }
   const model = body.model ?? "onx-301-check-in";
   const completionId = `chatcmpl-${session.id.slice(0, 8)}-${Date.now()}`;
 

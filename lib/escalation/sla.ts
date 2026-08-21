@@ -16,7 +16,7 @@
  * aware, and a page that waits twenty hours leaves four for everything else.
  */
 import type { EscalationUrgency } from "../clinical/safety.ts";
-import { configuredWindow, nextOpening } from "../clinical/calling-hours.ts";
+import { configuredWindow, endOfNextOpening } from "../clinical/calling-hours.ts";
 
 export const ACK_SLA_MS: Record<EscalationUrgency, number> = {
   emergency: 15 * 60 * 1000,
@@ -46,7 +46,9 @@ export function ackDeadline(urgency: EscalationUrgency, from = Date.now()): Date
   const window = configuredWindow();
   if (!window) return fixed;
 
-  // The next opening strictly after the raise time; if the site is open now,
-  // still the *next* one, because "next business day" is not "in ten minutes".
-  return nextOpening(new Date(from), window);
+  // The *end* of the next open period. Using its first instant meant a routine
+  // flag raised on Friday afternoon fell due at 09:00:00 Monday, and the
+  // one-minute sweep paged the backup at 09:01 — before anyone had opened their
+  // mail. "By close of the next business day" is what the phrase means.
+  return endOfNextOpening(new Date(from), window);
 }

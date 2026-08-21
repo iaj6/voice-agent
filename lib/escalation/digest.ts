@@ -63,7 +63,10 @@ export function composeDigest(rows: DeliveryRecord[], now: Date): { subject: str
 }
 
 export async function sendDigest(now = new Date()): Promise<DigestResult> {
-  const rows = await getDeliveryStore().openLadder();
+  // unacknowledged(), not openLadder(): the ladder retires an escalation once
+  // it has alarmed, which is precisely the one the digest exists to keep
+  // reporting the next morning.
+  const rows = await getDeliveryStore().unacknowledged();
   // One row per escalation: the ladder holds every attempt, and a digest that
   // counted attempts would report one unanswered page three times.
   const byEscalation = new Map<string, DeliveryRecord>();

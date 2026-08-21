@@ -23,7 +23,6 @@ import { getDeliveryStore, type DeliveryRecord } from "../store/deliveries.ts";
 import { getSessionStore } from "../store/session-store.ts";
 import type { CheckInSession, EscalationRecord } from "../store/session.ts";
 import { deliverEscalation } from "./deliver.ts";
-import { ACK_SLA_MS } from "./sla.ts";
 import { escalationRecipient } from "./transport.ts";
 
 /**
@@ -137,16 +136,18 @@ export async function sweepEscalations(now = new Date()): Promise<SweepResult> {
         }
         continue;
       }
+      // Backoff from when the attempt was actually made.
+      //
+      // It used to reconstruct the send time by subtracting the SLA from the
+      // deadline — which stopped being true the moment routine deadlines started
+      // resolving against the call window. For routine the derived "send time"
+      // became nextOpening minus 24h, often in the future, so the elapsed time
+      // went negative, the backoff never expired, and a failed routine page was
+      // never retried at all.
       const last = primary.at(-1);
-      if (last && now.getTime() - Date.parse(last.deadlineAt) < 0) {
-        // Backoff is measured from the attempt, and deadlineAt is the only
-        // timestamp the record carries per attempt; a failed row's deadline is
-        // still its send time plus the SLA, so wait a beat before trying again.
-        const since = Date.parse(last.deadlineAt) - ACK_SLA_MS[last.urgency];
-        if (now.getTime() - since < RETRY_BACKOFF_MS) {
-          result.stillWaiting += 1;
-          continue;
-        }
+      if (last && now.getTime() - Date.parse(last.createdAt) < RETRY_BACKOFF_MS) {
+        result.stillWaiting += 1;
+        continue;
       }
       const retry = await deliverEscalation(session, escalation, { now });
       await getSessionStore().appendAudit(session);

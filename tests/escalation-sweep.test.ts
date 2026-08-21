@@ -266,3 +266,49 @@ test("an alarmed escalation leaves the sweeper's working set", async () => {
   const open = await getDeliveryStore().openLadder();
   assert.deepEqual(open, [], "an alarmed escalation is swept forever");
 });
+
+test("a failed routine page is retried, not stalled forever", async () => {
+  // Backoff used to reconstruct the send time by subtracting the SLA from the
+  // deadline. Once routine deadlines started resolving against the call window
+  // that inversion stopped holding: the derived send time landed in the future,
+  // elapsed time went negative, and the backoff never expired.
+  process.env.VOICE_AGENT_CALL_WINDOW = "Mon-Fri 09:00-17:00 America/New_York";
+  const { __resetCallWindow } = await import("../lib/clinical/calling-hours.ts");
+  __resetCallWindow();
+
+  transport.failing = true;
+  const session = await getSessionStore().create();
+  session.subjectUtterances = ["I've been very tired"];
+  await executeTool(session, "verify_subject", VERIFY);
+  await executeTool(session, "escalate_to_coordinator", {
+    urgency: "routine",
+    reason: "Worth a look at the next review.",
+    related_event_ids: [],
+  });
+  await getSessionStore().save(session);
+
+  transport.failing = false;
+  const pass = await sweepEscalations(later(RETRY_WINDOW));
+  assert.equal(pass.retried, 1, "a failed routine page was never retried");
+
+  delete process.env.VOICE_AGENT_CALL_WINDOW;
+  __resetCallWindow();
+});
+
+test("the digest still reports an escalation that has already alarmed", async () => {
+  // openLadder retires an escalation once the ladder is exhausted, which is
+  // precisely the one the digest exists to keep reporting the next morning. It
+  // was reading that query and finding nothing.
+  delete process.env.ESCALATION_EMAIL_SECONDARY;
+  const session = await escalatedCall();
+  await sweepEscalations(pastDeadline());
+
+  const { getDeliveryStore } = await import("../lib/store/deliveries.ts");
+  assert.deepEqual(await getDeliveryStore().openLadder(), [], "the ladder should be retired");
+
+  const outstanding = await getDeliveryStore().unacknowledged();
+  assert.ok(
+    outstanding.some((d) => d.sessionId === session.id),
+    "an alarmed, unacknowledged escalation vanished from the digest's view",
+  );
+});

@@ -10,7 +10,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  __resetCallWindow,
   configuredWindow,
+  endOfNextOpening,
   nextOpening,
   parseCallWindow,
   windowState,
@@ -23,6 +25,7 @@ const OFFICE = "Mon-Fri 09:00-17:00 America/New_York";
 
 beforeEach(() => {
   delete process.env.VOICE_AGENT_CALL_WINDOW;
+  __resetCallWindow();
 });
 
 test("the agreed windows are what the code uses", () => {
@@ -75,16 +78,23 @@ test("routine escalations are due the next business day, not in 24 hours", () =>
   const due = ackDeadline("routine", fridayAfternoon);
 
   const window = configuredWindow()!;
-  assert.equal(windowState(due, window).open, true, "the deadline is when nobody is on call");
   assert.ok(
     due.getTime() > fridayAfternoon + 24 * 3600 * 1000,
     "the deadline fell on the weekend",
   );
+
+  // The *end* of Monday, not its first instant. A deadline at 09:00:00 expires
+  // as the office unlocks: the one-minute sweep sees it overdue at 09:00:01 and
+  // pages the backup before anyone has opened their mail.
   assert.equal(
     due.getTime(),
-    nextOpening(new Date(fridayAfternoon), window).getTime(),
-    "not the next opening",
+    endOfNextOpening(new Date(fridayAfternoon), window).getTime(),
   );
+  assert.notEqual(due.getTime(), nextOpening(new Date(fridayAfternoon), window).getTime());
+
+  // A coordinator has the whole of Monday: one minute before the deadline the
+  // line is still open.
+  assert.equal(windowState(new Date(due.getTime() - 60_000), window).open, true);
 });
 
 test("emergency and urgent deadlines ignore the window", () => {
@@ -112,6 +122,7 @@ const row = (over: Partial<DeliveryRecord>): DeliveryRecord => ({
   acknowledgedAt: null,
   acknowledgedBy: null,
   deadlineAt: new Date().toISOString(),
+  createdAt: new Date().toISOString(),
   ...over,
 });
 
@@ -138,4 +149,56 @@ test("a quiet day sends nothing", () => {
   // that matters gets missed.
   const { subject } = composeDigest([row({})], new Date());
   assert.match(subject, /awaiting acknowledgement/);
+});
+
+test("the calling window is enforced for every entry point, not one route", async () => {
+  // It was on POST /api/session, which is the console. The telephony shim calls
+  // createSession() directly, so a real phone call at 03:00 still opened a
+  // session — the exact scenario the window exists to close.
+  const { createSession, ServiceClosedError } = await import("../lib/store/session.ts");
+  const { __setSessionStore } = await import("../lib/store/session-store.ts");
+  const { __setKeyStore } = await import("../lib/store/keys.ts");
+  __setSessionStore(null);
+  __setKeyStore(null);
+  delete process.env.DATABASE_URL;
+
+  process.env.VOICE_AGENT_CALL_WINDOW = "Mon-Mon 00:00-00:01 America/New_York";
+  __resetCallWindow();
+
+  await assert.rejects(() => createSession(), ServiceClosedError);
+
+  // The eval harness is not a participant; a suite that only passes during
+  // office hours fails for reasons unrelated to the code.
+  const synthetic = await createSession({ synthetic: true });
+  assert.ok(synthetic.id, "a synthetic session was refused");
+});
+
+test("a malformed window is ignored loudly rather than taking the agent down", () => {
+  // It used to throw from configuredWindow on every call, so a typo produced a
+  // raw 500 on every session open and escaped deliverEscalation's guard.
+  process.env.VOICE_AGENT_CALL_WINDOW = "Mon-Fri 9am to 5pm";
+  __resetCallWindow();
+
+  assert.doesNotThrow(() => windowState());
+  assert.equal(windowState().open, true, "a typo closed the line entirely");
+  assert.equal(configuredWindow(), null);
+});
+
+test("finding the next opening is cheap enough to sit on an open route", () => {
+  // Minute-stepping with a fresh Intl formatter cost ~105ms per search, on an
+  // unauthenticated route — a burst outside hours pins the event loop.
+  const window = parseCallWindow(OFFICE);
+  const started = process.hrtime.bigint();
+  for (let i = 0; i < 20; i++) {
+    nextOpening(new Date("2026-08-21T22:00:00Z"), window);
+  }
+  const msEach = Number(process.hrtime.bigint() - started) / 1e6 / 20;
+  assert.ok(msEach < 20, `nextOpening takes ${msEach.toFixed(1)}ms per call`);
+});
+
+test("the reopen time names its timezone", () => {
+  // "Monday at 9:00am" spoken to a UK participant against a New York window
+  // sends them back four hours early.
+  const state = windowState(new Date("2026-08-22T03:00:00Z"), parseCallWindow(OFFICE));
+  assert.match(state.reopensDescription!, /Monday at 9:00am [A-Z]/, "no zone named");
 });

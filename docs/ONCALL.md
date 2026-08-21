@@ -60,9 +60,9 @@ for everything else.
 | Acknowledgement | one-time signed link; a GET shows a button, a POST records it; scanners cannot acknowledge |
 | Alarm | audit entry on the participant's record, plus a message to the alarm address |
 | Windows | 15 min / 4 h / next business day, per D-A. Routine resolves against the call window rather than a fixed offset |
-| Sweeper | `POST /api/escalation/sweep`, shared-secret, scheduled every minute in `vercel.json` |
-| Digest | `POST /api/escalation/digest`, weekday mornings; silent when nothing is outstanding |
-| Calling window | `POST /api/session` returns 503 with a reopen time outside cover |
+| Sweeper | `/api/escalation/sweep`, GET or POST, `CRON_SECRET` or `ESCALATION_SWEEP_SECRET`, every minute in `vercel.json` |
+| Digest | `/api/escalation/digest`, 13:00 UTC weekdays (09:00 ET); silent when nothing is outstanding |
+| Calling window | Enforced in `createSession`, so the console **and** the telephony path both honour it |
 | Acknowledgement | a typed name, kept alongside the requesting address |
 
 Two gaps prompted D-C and D-F, and both are now closed in code. They are recorded here
@@ -152,7 +152,7 @@ human taking responsibility.
 
 | | Option | Consequence |
 |---|---|---|
-| **a** | **Vercel Cron every minute** | Matches the tightest window: an unacknowledged emergency reaches the backup within about six minutes of a five-minute SLA. |
+| **a** | **Vercel Cron every minute** | Matches the tightest window: an unacknowledged emergency reaches the backup within about sixteen minutes of a fifteen-minute SLA. |
 | **b** | **Every 5 minutes** | Cheaper, and adds up to a full extra tier-window of delay on the emergency path. |
 | **c** | **External scheduler the site controls** | Right if the site runs its own ops. Adds a dependency on somebody else's uptime for the alarm path. |
 

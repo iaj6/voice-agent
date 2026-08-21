@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AuditEntry, AuditTrail } from "./audit.ts";
 import { getSessionStore } from "./session-store.ts";
+import { windowState } from "../clinical/calling-hours.ts";
 import type { Subject } from "../clinical/protocol.ts";
 import type {
   CtcaeGrade,
@@ -147,9 +148,41 @@ export interface CheckInSession {
  * a call that cannot survive a restart is not something a participant should be
  * on the other end of.
  */
+/**
+ * Thrown when a call arrives outside the hours somebody is on call.
+ *
+ * Carries what to tell the caller, because every entry point has to say the same
+ * thing and the reopen time is the only useful part of it.
+ */
+export class ServiceClosedError extends Error {
+  readonly opensAt: Date | null;
+  readonly reopensDescription: string | null;
+
+  constructor(state: { opensAt: Date | null; reopensDescription: string | null }) {
+    super(
+      "The check-in line is closed right now. It reopens " +
+        `${state.reopensDescription ?? "when the site is next open"}.`,
+    );
+    this.opensAt = state.opensAt;
+    this.reopensDescription = state.reopensDescription;
+  }
+}
+
 export async function createSession(
   options: { resumable?: boolean; synthetic?: boolean } = {},
 ): Promise<CheckInSession> {
+  // The gate lives here, not on one route.
+  //
+  // It was on POST /api/session, which is the console. The actual telephony path
+  // is the OpenAI-compatible shim, and it calls createSession() directly — so a
+  // real phone call at 03:00 still opened a session and still escalated into an
+  // unwatched inbox, which is the precise scenario the window exists to close.
+  // One door, and every caller goes through it.
+  if (options.synthetic !== true) {
+    const hours = windowState();
+    if (!hours.open) throw new ServiceClosedError(hours);
+  }
+
   const session = await getSessionStore().create();
 
   // Persisted whenever either flag is set, not only when resumable is.

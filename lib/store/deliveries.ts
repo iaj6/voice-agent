@@ -50,6 +50,8 @@ export interface DeliveryRecord {
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
   deadlineAt: string;
+  /** When the attempt was made. The only honest basis for a retry backoff. */
+  createdAt: string;
 }
 
 export interface NewDelivery {
@@ -89,6 +91,16 @@ export interface DeliveryStore {
   overdue(now?: Date): Promise<DeliveryRecord[]>;
   attemptsFor(sessionId: string, escalationId: string): Promise<number>;
   /**
+   * Everything nobody has acknowledged, alarmed or not.
+   *
+   * Distinct from openLadder, which retires an escalation once the ladder has
+   * nothing left to try. The digest wanted this one and was reading that one,
+   * so an emergency raised at 20:00 had alarmed by 20:35 and was gone from the
+   * set before the morning digest ran — the summary reported "nothing
+   * outstanding" about the exact case it exists to keep saying out loud.
+   */
+  unacknowledged(): Promise<DeliveryRecord[]>;
+  /**
    * Everything still in flight: unacknowledged, and not yet alarmed.
    *
    * An alarm is the terminal rung. Once one is raised the ladder has nothing
@@ -119,6 +131,7 @@ function rowToRecord(row: Record<string, unknown>): DeliveryRecord {
       : null,
     acknowledgedBy: (row.acknowledged_by as string | null) ?? null,
     deadlineAt: new Date(row.deadline_at as string).toISOString(),
+    createdAt: new Date(row.created_at as string).toISOString(),
   };
 }
 
@@ -136,6 +149,7 @@ class MemoryDeliveryStore implements DeliveryStore {
       acknowledgedAt: null,
       acknowledgedBy: null,
       deadlineAt: input.deadlineAt.toISOString(),
+      createdAt: new Date().toISOString(),
       ackTokenHash: hashToken(ackToken),
     };
     this.rows.set(record.id, record);
@@ -209,6 +223,17 @@ class MemoryDeliveryStore implements DeliveryStore {
     return [...this.rows.values()].filter(
       (r) => r.sessionId === sessionId && r.escalationId === escalationId,
     ).length;
+  }
+
+  async unacknowledged(): Promise<DeliveryRecord[]> {
+    const acked = new Set(
+      [...this.rows.values()]
+        .filter((r) => r.acknowledgedAt !== null)
+        .map((r) => `${r.sessionId}:${r.escalationId}`),
+    );
+    return [...this.rows.values()]
+      .filter((r) => !acked.has(`${r.sessionId}:${r.escalationId}`) && r.status !== "suppressed")
+      .map((r) => ({ ...r }));
   }
 
   async openLadder(): Promise<DeliveryRecord[]> {
@@ -323,6 +348,20 @@ class PostgresDeliveryStore implements DeliveryStore {
        where acknowledged_at is null and status <> 'failed'
          and deadline_at < ${now.toISOString()}
        order by deadline_at`) as Record<string, unknown>[];
+    return rows.map(rowToRecord);
+  }
+
+  async unacknowledged(): Promise<DeliveryRecord[]> {
+    const sql = getDb();
+    const rows = (await sql`
+      select d.* from escalation_delivery d
+       where d.status <> 'suppressed'
+         and not exists (
+           select 1 from escalation_delivery a
+            where a.session_id = d.session_id
+              and a.escalation_id = d.escalation_id
+              and a.acknowledged_at is not null)
+       order by d.deadline_at`) as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }
 
