@@ -190,6 +190,74 @@ describe(
       assert.deepEqual((await status(scratch, real)).drifted, []);
     });
 
+    test("two runners racing do not both try to apply", async () => {
+      // The hazard the switch away from idempotent DDL introduced: a CI deploy
+      // step and a manual run both read the same pending list, and the loser
+      // hits "relation already exists" — 0002 onward deliberately omit `if not
+      // exists` — then reports that nothing was applied, which is false and
+      // sends the operator after the wrong problem.
+      const url = new URL(
+        process.env.VOICE_AGENT_TEST_DATABASE_URL_UNPOOLED ??
+          process.env.VOICE_AGENT_TEST_DATABASE_URL ??
+          "",
+      );
+      const raceName = `va_race_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+      await admin.query(`create database ${raceName}`);
+      url.pathname = `/${raceName}`;
+
+      const a = new Pool({ connectionString: url.toString() });
+      const b = new Pool({ connectionString: url.toString() });
+      a.on("error", () => {});
+      b.on("error", () => {});
+      try {
+        const [ra, rb] = await Promise.all([migrate(a), migrate(b)]);
+        const total = ra.applied.length + rb.applied.length;
+        assert.equal(
+          total,
+          loadMigrations().length,
+          "a migration was applied twice, or one runner's work went missing",
+        );
+        const state = await status(a);
+        assert.deepEqual(state.pending, []);
+      } finally {
+        await a.end();
+        await b.end();
+        await new Promise((r) => setTimeout(r, 250));
+        await admin.query(`drop database if exists ${raceName} with (force)`);
+      }
+    });
+
+    test("status does not create the ledger it reports on", async () => {
+      const url = new URL(
+        process.env.VOICE_AGENT_TEST_DATABASE_URL_UNPOOLED ??
+          process.env.VOICE_AGENT_TEST_DATABASE_URL ??
+          "",
+      );
+      const freshName = `va_ro_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+      await admin.query(`create database ${freshName}`);
+      url.pathname = `/${freshName}`;
+      const fresh = new Pool({ connectionString: url.toString() });
+      fresh.on("error", () => {});
+      try {
+        const state = await status(fresh);
+        assert.equal(state.applied.length, 0);
+        assert.equal(state.pending.length, loadMigrations().length);
+
+        const made = await fresh.query(
+          `select to_regclass('public.schema_migration') as t`,
+        );
+        assert.equal(
+          made.rows[0].t,
+          null,
+          "reporting on a database changed it — --status is documented as read-only",
+        );
+      } finally {
+        await fresh.end();
+        await new Promise((r) => setTimeout(r, 250));
+        await admin.query(`drop database if exists ${freshName} with (force)`);
+      }
+    });
+
     test("a database ahead of this checkout is refused", async () => {
       const short = loadMigrations().slice(0, -1);
       await assert.rejects(
@@ -214,7 +282,10 @@ describe(
           checksum: "y".repeat(64),
         },
       ];
-      await assert.rejects(() => migrate(scratch, { migrations: unrecordable }), /rolled back/);
+      await assert.rejects(
+        () => migrate(scratch, { migrations: unrecordable }),
+        /Nothing from it was applied and it is not recorded/,
+      );
 
       const left = await scratch.query(`select to_regclass('public.orphan_ddl') as t`);
       assert.equal(
@@ -236,7 +307,10 @@ describe(
           checksum: "x".repeat(64),
         },
       ];
-      await assert.rejects(() => migrate(scratch, { migrations: broken }), /rolled back/);
+      await assert.rejects(
+        () => migrate(scratch, { migrations: broken }),
+        /Nothing from it was applied and it is not recorded/,
+      );
 
       const left = await scratch.query(`select to_regclass('public.will_not_exist') as t`);
       assert.equal(left.rows[0].t, null, "a rolled-back migration left a table behind");

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AuditTrail, type AuditEntry } from "./audit.ts";
 import { getDb, isDatabaseConfigured } from "./db.ts";
-import { schemaVersion } from "./migrate.ts";
 import type { CheckInSession } from "./session.ts";
 
 /**
@@ -245,6 +244,54 @@ class MemorySessionStore implements SessionStore {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The highest migration the *database* has applied, cached for the process.
+ *
+ * Deliberately not imported from lib/store/migrate.ts. That module lists a
+ * directory and reads files at module scope, and this file is reachable from
+ * every API route — pulling it in made the bundler try to resolve the migrations
+ * directory as a module and broke `next build` outright, and had it built, the
+ * path would have pointed inside .next/server where no .sql file is emitted.
+ *
+ * Cached because it changes only when a migration runs, which is a deploy step,
+ * not something that happens mid-call. A process that started before a migration
+ * keeps reporting the version it verified at startup, which is the honest answer
+ * for the sessions it created.
+ */
+let appliedVersion: string | null = null;
+
+async function appliedSchemaVersion(): Promise<string> {
+  if (appliedVersion !== null) return appliedVersion;
+  const sql = getDb();
+  // Tolerates a database with no ledger — an un-migrated checkout should not
+  // fail to open a call, it should say it does not know.
+  const rows = (await sql`
+    select case
+             when to_regclass('public.schema_migration') is null then null
+             else (select max(version) from schema_migration)
+           end as version`) as { version: string | null }[];
+  appliedVersion = rows[0]?.version ?? "unknown";
+  return appliedVersion;
+}
+
+/** Test seam: forget the cached schema version. */
+export function __resetSchemaVersionCache(): void {
+  appliedVersion = null;
+}
+
+/*
+ * `instrument` is out-of-band metadata about the row, not part of the domain
+ * object, and is deliberately not read back: nothing in a call needs to know
+ * which schema is holding it, and a field the application can read is a field
+ * the application can be tempted to branch on. It is there for whoever
+ * reconstructs the record later, which is why the test that covers it queries
+ * the column directly rather than going through the store.
+ *
+ * The in-memory store has no equivalent because it is a fallback for tests and
+ * for a checkout without credentials. It is not a record of anything, and giving
+ * it a provenance stamp would suggest otherwise.
+ */
+
 class PostgresSessionStore implements SessionStore {
   readonly kind = "postgres" as const;
 
@@ -254,15 +301,19 @@ class PostgresSessionStore implements SessionStore {
     openingEntry(session);
     // Which schema held this record, stamped at creation. The `instrument`
     // column was added for exactly this and nothing had been writing to it, so
-    // every row so far claims no provenance at all. A record that cannot say
-    // what shape it was captured in is reconstructable only by guessing, and
-    // guessing is what versioned migrations exist to remove. Model, voice and
-    // prompt hash belong here too and follow once the runner reports them.
+    // every row before this claims no provenance at all.
+    //
+    // Read from the ledger, not from the migration files on disk. The files say
+    // what this checkout *contains*; the ledger says what the database has
+    // actually run, and those differ for the whole window between a deploy and
+    // its migration step — exactly when a wrong answer is most likely and least
+    // visible. Model, voice and prompt hash belong here too and follow once the
+    // runner reports them.
     await sql`
       insert into check_in_session (id, created_at, status, record, messages, instrument)
       values (${session.id}, ${session.createdAt}, ${session.status},
               ${JSON.stringify(toRecord(session))}::jsonb, '[]'::jsonb,
-              ${JSON.stringify({ schemaVersion: schemaVersion() })}::jsonb)`;
+              ${JSON.stringify({ schemaVersion: await appliedSchemaVersion() })}::jsonb)`;
     await this.appendAudit(session);
     return session;
   }

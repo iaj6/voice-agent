@@ -61,7 +61,7 @@ export interface SqlClient {
  * transaction of its own — the protection was real and it was not mine.
  */
 export interface SqlPool extends SqlClient {
-  connect?(): Promise<SqlClient & { release(): void }>;
+  connect?(): Promise<SqlClient & { release(err?: Error): void }>;
 }
 
 export function checksum(sql: string): string {
@@ -132,8 +132,21 @@ const LEDGER = `
     execution_ms integer     not null
   )`;
 
+/**
+ * Reads the ledger without creating it.
+ *
+ * `--status` is documented as reporting without changing anything, and it used
+ * to run the bootstrap DDL on the way past — so inspecting a fresh database
+ * created the table, and inspecting one through a read-only role failed on
+ * permissions instead of reporting. The table is created on the apply path,
+ * where writing is the point.
+ */
 export async function readLedger(sql: SqlClient): Promise<AppliedMigration[]> {
-  await sql.query(LEDGER);
+  const { rows: exists } = await sql.query(
+    `select to_regclass('public.schema_migration') as t`,
+  );
+  if (exists[0]?.t == null) return [];
+
   const { rows } = await sql.query(
     `select version, name, checksum, applied_at, execution_ms
        from schema_migration order by version`,
@@ -179,6 +192,12 @@ export async function status(
 export class MigrationDriftError extends Error {}
 
 /**
+ * Advisory lock key. Arbitrary but fixed — every runner must pick the same one
+ * or the lock serialises nothing.
+ */
+const LOCK_KEY = 8_150_301;
+
+/**
  * Applies everything pending, in order, each in its own transaction.
  *
  * Per-migration transactions rather than one spanning all of them: Postgres
@@ -216,16 +235,34 @@ export async function migrate(
     );
   }
 
-  const applied: Migration[] = [];
-  for (const migration of state.pending) {
-    const startedAt = Date.now();
-    // One connection for the whole migration, so the transaction is real. The
-    // statement that matters most is the ledger insert: DDL that applied without
-    // being recorded is the worst state to leave a database in, because the next
-    // run will try to apply it again.
-    const client = sql.connect ? await sql.connect() : null;
-    const run = client ?? sql;
-    try {
+  // One connection for the whole run: the advisory lock lives on a session, and
+  // each migration's transaction has to be on the connection that holds it.
+  const client = sql.connect ? await sql.connect() : null;
+  const run: SqlClient = client ?? sql;
+  let poisoned: unknown = null;
+
+  try {
+    // Serialise runners. Without this, a CI deploy step and a manual run both
+    // read the same pending list and both try to apply it; the loser hits
+    // "relation already exists" — 0002 onward deliberately omit `if not exists`
+    // — and reports that nothing was applied, which is false and points the
+    // operator at the wrong problem. The old idempotent schema file could be
+    // run concurrently; ordered migrations cannot, so they have to take a lock.
+    if (client) await run.query("select pg_advisory_lock($1)", [LOCK_KEY]);
+    await run.query(LEDGER);
+
+    // Re-read under the lock. Whatever we computed before waiting for it may
+    // have been applied by the runner we were waiting on.
+    const pending = client
+      ? (await status(run, migrations)).pending
+      : state.pending;
+
+    const applied: Migration[] = [];
+    for (const migration of pending) {
+      const startedAt = Date.now();
+      // The transaction's real job is the ledger insert: DDL that applied
+      // without being recorded is the worst state to leave a database in,
+      // because the next run tries to apply it again.
       await run.query("begin");
       try {
         await run.query(migration.sql);
@@ -236,20 +273,39 @@ export async function migrate(
         );
         await run.query("commit");
       } catch (err) {
-        await run.query("rollback").catch(() => {});
+        let rolledBack = true;
+        try {
+          await run.query("rollback");
+        } catch {
+          // The connection is still inside an aborted transaction and must not
+          // go back into the pool for someone else to inherit.
+          rolledBack = false;
+          poisoned = err;
+        }
         throw new Error(
-          `Migration ${migration.file} failed and was rolled back. ` +
-            `Nothing from it was applied and it is not recorded.\n${String(err)}`,
+          `Migration ${migration.file} failed.\n` +
+            (rolledBack
+              ? "Nothing from it was applied and it is not recorded."
+              : "The rollback also failed — this database may be left part-migrated. " +
+                "Check it by hand before running again.") +
+            `\n${String(err)}`,
         );
       }
-    } finally {
-      client?.release();
+      applied.push(migration);
+      options.onApplied?.(migration, Date.now() - startedAt);
     }
-    applied.push(migration);
-    options.onApplied?.(migration, Date.now() - startedAt);
-  }
 
-  return { applied };
+    return { applied };
+  } finally {
+    if (client) {
+      if (!poisoned) {
+        await run.query("select pg_advisory_unlock($1)", [LOCK_KEY]).catch(() => {});
+      }
+      // Handing the error to release() makes the pool discard the connection
+      // rather than reuse one still inside an aborted transaction.
+      client.release(poisoned as Error | undefined);
+    }
+  }
 }
 
 /** Re-records checksums for applied migrations. Deliberate, and never automatic. */

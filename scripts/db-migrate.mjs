@@ -38,6 +38,22 @@ if (!process.env.DATABASE_URL) {
 }
 
 const args = process.argv.slice(2);
+
+// Unknown flags are refused rather than falling through to the apply path. The
+// flag this script documented until the migration rewrite was `--verify`, for
+// read-only inspection; treating anything that was not `--status` as "apply"
+// meant the old habit silently migrated production. So does a typo.
+const KNOWN = new Set(["--status", "--repair"]);
+const unknown = args.filter((a) => !KNOWN.has(a));
+if (unknown.length > 0) {
+  console.error(
+    `\nUnknown option${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}\n` +
+      "  (no flags)  apply everything pending\n" +
+      "  --status    report without changing anything\n" +
+      "  --repair    re-record a checksum that drifted\n",
+  );
+  process.exit(2);
+}
 // Unpooled where available: DDL and a connection pooler are a poor combination.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL,

@@ -27,6 +27,13 @@ const STEPS = [
   { name: "types", cmd: "npx", args: ["tsc", "--noEmit"] },
   { name: "lint", cmd: "npx", args: ["eslint", ".", "--max-warnings=0"] },
   { name: "unit tests", cmd: "npm", args: ["test", "--silent"] },
+  // The gate reported green on a commit that did not build. Types, lint and
+  // tests all run the sources directly under Node; the bundler is the only thing
+  // that resolves imports the way the deployed app does, and it was the only
+  // check not being run. A migration module that lists a directory at module
+  // scope typechecked, linted and passed 140 tests while making `next build`
+  // fail outright.
+  { name: "build", cmd: "npx", args: ["next", "build"] },
   {
     name: "safety-net floor",
     cmd: "node",

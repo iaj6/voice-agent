@@ -65,6 +65,10 @@ and say why in the commit.
   rollback test passed regardless, because Postgres runs a multi-statement simple query
   in an implicit transaction of its own. The protection was real; it just was not the
   one under test.
+- **The gate reported green on a commit that did not build.** Types, lint and 140 tests
+  all run the sources directly under Node; the bundler is the only thing that resolves
+  imports the way the deployed app does, and it was the one check not being run. `next
+  build` is now a step in `npm run verify`. It costs about three seconds.
 
 **Ask:** what would this look like if it were broken? If the answer is "the same", the
 check is not a check. Negative assertions especially need a positive control alongside
