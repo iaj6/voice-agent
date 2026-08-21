@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AuditTrail, type AuditEntry } from "./audit.ts";
 import { getDb, isDatabaseConfigured } from "./db.ts";
+import { schemaVersion } from "./migrate.ts";
 import type { CheckInSession } from "./session.ts";
 
 /**
@@ -251,10 +252,17 @@ class PostgresSessionStore implements SessionStore {
     const sql = getDb();
     const session = blankSession(randomUUID());
     openingEntry(session);
+    // Which schema held this record, stamped at creation. The `instrument`
+    // column was added for exactly this and nothing had been writing to it, so
+    // every row so far claims no provenance at all. A record that cannot say
+    // what shape it was captured in is reconstructable only by guessing, and
+    // guessing is what versioned migrations exist to remove. Model, voice and
+    // prompt hash belong here too and follow once the runner reports them.
     await sql`
-      insert into check_in_session (id, created_at, status, record, messages)
+      insert into check_in_session (id, created_at, status, record, messages, instrument)
       values (${session.id}, ${session.createdAt}, ${session.status},
-              ${JSON.stringify(toRecord(session))}::jsonb, '[]'::jsonb)`;
+              ${JSON.stringify(toRecord(session))}::jsonb, '[]'::jsonb,
+              ${JSON.stringify({ schemaVersion: schemaVersion() })}::jsonb)`;
     await this.appendAudit(session);
     return session;
   }

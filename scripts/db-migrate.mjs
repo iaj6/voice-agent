@@ -1,17 +1,18 @@
 /**
- * Applies lib/store/schema.sql.
+ * Applies pending schema migrations.
  *
- * The schema is idempotent (`create ... if not exists`, `create or replace`), so
- * this is safe to re-run. It is not a migration framework and does not pretend
- * to be one — the pilot needs versioned migrations before it needs anything
- * clever, and that is a Sprint 1 follow-up rather than something to fake now.
+ *   node scripts/db-migrate.mjs             # apply everything pending
+ *   node scripts/db-migrate.mjs --status    # report without changing anything
+ *   node scripts/db-migrate.mjs --repair    # re-record a changed checksum
  *
- *   node scripts/db-migrate.mjs
- *   node scripts/db-migrate.mjs --verify   # report structure without changing it
+ * Not a re-runnable schema file any more. Migrations are ordered and recorded,
+ * so a database can say which of them it has run and an empty one can be brought
+ * to the current shape by replaying them — see lib/store/migrate.ts.
  */
 
 import { readFileSync } from "node:fs";
-import { neon, Pool } from "@neondatabase/serverless";
+import { Pool } from "@neondatabase/serverless";
+import { loadMigrations, migrate, repair, status } from "../lib/store/migrate.ts";
 
 for (const file of [".env", ".env.local"]) {
   try {
@@ -36,42 +37,69 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-const sql = neon(process.env.DATABASE_URL);
-const verifyOnly = process.argv.includes("--verify");
+const args = process.argv.slice(2);
+// Unpooled where available: DDL and a connection pooler are a poor combination.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL,
+});
 
-if (!verifyOnly) {
-  const ddl = readFileSync(new URL("../lib/store/schema.sql", import.meta.url), "utf8");
-  console.log(`\n${C.bold("applying schema")}`);
-  // DDL goes over a real connection, not the HTTP driver: the schema contains
-  // dollar-quoted function bodies that a naive split on ";" would tear in half,
-  // and the HTTP endpoint does not accept multi-statement queries. Unpooled
-  // where available — DDL and a connection pooler are a poor combination.
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL,
-  });
-  try {
-    await pool.query(ddl);
-    console.log(`  ${C.good("✓")} ${C.dim("schema applied")}`);
-  } finally {
-    await pool.end();
+try {
+  const migrations = loadMigrations();
+
+  if (args.includes("--repair")) {
+    const fixed = await repair(pool, migrations);
+    console.log(`\n${C.bold("repair")}`);
+    if (fixed.length === 0) console.log(`  ${C.dim("nothing had drifted")}`);
+    for (const f of fixed) {
+      console.log(`  ${C.good("✓")} re-recorded ${f.version}_${f.name}`);
+    }
+  } else if (!args.includes("--status")) {
+    console.log(`\n${C.bold("migrate")}`);
+    const { applied } = await migrate(pool, {
+      migrations,
+      onApplied: (m, ms) =>
+        console.log(`  ${C.good("✓")} ${m.version}_${m.name} ${C.dim(`${ms}ms`)}`),
+    });
+    if (applied.length === 0) console.log(`  ${C.dim("already up to date")}`);
   }
-}
 
-console.log(`\n${C.bold("structure")}`);
-const tables = await sql`
-  select table_name, (select count(*) from information_schema.columns c
-                      where c.table_name = t.table_name) as cols
-  from information_schema.tables t
-  where table_schema = 'public' order by table_name`;
-for (const t of tables) console.log(`  ${t.table_name.padEnd(22)} ${C.dim(`${t.cols} columns`)}`);
+  const state = await status(pool, migrations);
+  console.log(`\n${C.bold("schema")}`);
+  for (const m of migrations) {
+    const at = state.applied.find((a) => a.version === m.version);
+    const mark = at ? C.good("✓") : C.bad("·");
+    const when = at ? C.dim(new Date(at.applied_at).toISOString().slice(0, 19).replace("T", " ")) : C.bad("pending");
+    console.log(`  ${mark} ${m.version}_${m.name.padEnd(28)} ${when}`);
+  }
+  if (state.drifted.length > 0) {
+    console.log(`\n  ${C.bad("drifted:")} ${state.drifted.map((d) => d.version).join(", ")}`);
+  }
 
-const triggers = await sql`
-  select trigger_name, event_object_table, string_agg(event_manipulation, '/') as events
-  from information_schema.triggers where trigger_schema = 'public'
-  group by trigger_name, event_object_table order by event_object_table`;
-console.log(`\n${C.bold("guards")}`);
-for (const t of triggers) {
-  console.log(`  ${t.event_object_table.padEnd(22)} ${t.trigger_name} ${C.dim(`on ${t.events}`)}`);
+  const tables = await pool.query(
+    `select table_name, (select count(*) from information_schema.columns c
+                         where c.table_name = t.table_name) as cols
+       from information_schema.tables t
+      where table_schema = 'public' order by table_name`,
+  );
+  console.log(`\n${C.bold("structure")}`);
+  for (const t of tables.rows) {
+    console.log(`  ${t.table_name.padEnd(22)} ${C.dim(`${t.cols} columns`)}`);
+  }
+
+  const triggers = await pool.query(
+    `select trigger_name, event_object_table, string_agg(event_manipulation, '/') as events
+       from information_schema.triggers where trigger_schema = 'public'
+      group by trigger_name, event_object_table order by event_object_table`,
+  );
+  console.log(`\n${C.bold("guards")}`);
+  for (const t of triggers.rows) {
+    console.log(`  ${t.event_object_table.padEnd(22)} ${t.trigger_name} ${C.dim(`on ${t.events}`)}`);
+  }
+  if (triggers.rows.length === 0) console.log(`  ${C.bad("none — the audit table is mutable")}`);
+  console.log("");
+} catch (err) {
+  console.error(`\n${C.bad("migration failed")}\n${err.message}\n`);
+  process.exitCode = 1;
+} finally {
+  await pool.end();
 }
-if (triggers.length === 0) console.log(`  ${C.bad("none — the audit table is mutable")}`);
-console.log("");

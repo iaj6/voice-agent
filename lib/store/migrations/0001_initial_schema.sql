@@ -1,4 +1,14 @@
--- ONX-301 check-in persistence
+-- ONX-301 check-in persistence — baseline.
+--
+-- The first migration, and the only one allowed to be idempotent. It has to be:
+-- it was adopted from a database that already existed, so it must apply cleanly
+-- whether the objects are there or not. Every migration after this one is strict
+-- DDL, and a migration that cannot apply is a failure rather than a no-op.
+--
+-- Never edit this file. The runner checksums applied migrations and refuses to
+-- start when one has changed underneath a database, because a schema that no
+-- longer matches its own recorded history cannot say which shape a record was
+-- captured under. Change the schema by adding a migration.
 --
 -- Two tables with deliberately different characters. `check_in_session` is
 -- mutable working state — the conversation and the clinical record as they

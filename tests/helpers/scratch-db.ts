@@ -15,11 +15,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { Pool } from "@neondatabase/serverless";
+import { migrate } from "../../lib/store/migrate.ts";
 import { STASH, STASH_UNPOOLED } from "./isolate-db.ts";
-
-const SCHEMA_SQL = new URL("../../lib/store/schema.sql", import.meta.url);
 
 /**
  * Credentials come from the stashed names, not DATABASE_URL — isolate-db.ts
@@ -45,6 +43,7 @@ export interface ScratchDb {
 export async function createScratchDb(): Promise<ScratchDb> {
   const name = `va_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const admin = new Pool({ connectionString: adminUrl() });
+  admin.on("error", () => {});
 
   try {
     await admin.query(`create database ${name}`);
@@ -57,10 +56,13 @@ export async function createScratchDb(): Promise<ScratchDb> {
   url.pathname = `/${name}`;
 
   const scratch = new Pool({ connectionString: url.toString() });
+  scratch.on("error", () => {});
   try {
-    // The whole file in one call: it contains dollar-quoted function bodies
-    // that a split on ";" would tear in half.
-    await scratch.query(readFileSync(SCHEMA_SQL, "utf8"));
+    // Replayed from the migrations, not from a separate schema file. A test
+    // fixture built a different way is a second source of truth that drifts, and
+    // the drift shows up as tests passing against a schema production does not
+    // have.
+    await migrate(scratch);
   } finally {
     await scratch.end();
   }
@@ -72,6 +74,7 @@ export async function createScratchDb(): Promise<ScratchDb> {
         // FORCE terminates the HTTP driver's lingering backends. Without it the
         // drop loses a race with its own connections and leaves the database
         // behind on every run.
+        await new Promise((r) => setTimeout(r, 250));
         await admin.query(`drop database if exists ${name} with (force)`);
       } finally {
         await admin.end();

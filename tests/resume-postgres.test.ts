@@ -16,6 +16,7 @@ import { test, before, beforeEach, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { __resetDb } from "../lib/store/db.ts";
+import { schemaVersion } from "../lib/store/migrate.ts";
 import {
   __setSessionStore,
   getSessionStore,
@@ -284,6 +285,19 @@ describe("resume against Postgres", { skip: databaseAvailable() ? false : "DATAB
       () => store.supersede(dropped, "00000000-0000-0000-0000-00000000000f"),
       /already closed/,
       "a lost race reported success, so the record could be carried forward twice",
+    );
+  });
+
+  test("a new record records the schema that captured it", async () => {
+    const session = await getSessionStore().create();
+    const rows = await raw!.query(
+      `select instrument from check_in_session where id = $1`,
+      [session.id],
+    );
+    assert.equal(
+      rows[0].instrument.schemaVersion,
+      schemaVersion(),
+      "the record cannot say what shape it was captured in",
     );
   });
 

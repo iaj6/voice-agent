@@ -60,6 +60,11 @@ and say why in the commit.
   asserted only in their JavaScript reimplementation. The tests passed either way.
 - The in-memory store handed out live references, so two "separate" sessions shared
   structure. The isolation tests were weaker than they read.
+- A migration runner wrapped each migration in `begin`/`commit` on a **pool**, which
+  hands out a different connection per statement — the transaction wrapped nothing. The
+  rollback test passed regardless, because Postgres runs a multi-statement simple query
+  in an implicit transaction of its own. The protection was real; it just was not the
+  one under test.
 
 **Ask:** what would this look like if it were broken? If the answer is "the same", the
 check is not a check. Negative assertions especially need a positive control alongside
