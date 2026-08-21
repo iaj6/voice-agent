@@ -32,6 +32,7 @@ function sessionWith(utterances: string[]): CheckInSession {
     summary: null,
     completedAt: null,
   shredded: false,
+  synthetic: false,
     audit: new AuditTrail("11111111-1111-4111-8111-111111111111"),
   };
 }

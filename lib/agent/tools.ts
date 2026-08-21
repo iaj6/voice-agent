@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { PROTOCOL, findSubject } from "../clinical/protocol.ts";
+import { emergencyPhrase, regionFor } from "../clinical/locale.ts";
 import {
   CTCAE_GRADES,
   ESCALATION_GRADE_THRESHOLD,
@@ -1253,6 +1254,10 @@ const handlers: Record<string, Handler> = {
   },
 
   async escalate_to_coordinator(session, input) {
+    // Whatever this agent says out loud about emergency services has to be true
+    // where the participant actually is. Site 002 is in the UK; telling someone
+    // in Manchester to call 911 costs them the seconds that matter most.
+    const region = regionFor(session.subject?.siteCountry);
     const urgency = String(input.urgency ?? "routine") as EscalationUrgency;
     const reasonText = String(input.reason ?? "");
 
@@ -1304,7 +1309,8 @@ const handlers: Record<string, Handler> = {
             instruction:
               duplicate.urgency === "emergency"
                 ? "This page cannot be delivered. Tell the subject in one sentence " +
-                  "to call 911 now and their study site directly, then call " +
+                  `to call ${emergencyPhrase(region)} now and their study site ` +
+                  "directly, then call " +
                   "complete_check_in with ended_early true. Do not try again."
                 : "This page cannot be delivered. Tell the subject to call their " +
                   "study site directly. Do not try again; continue the check-in " +
@@ -1350,7 +1356,8 @@ const handlers: Record<string, Handler> = {
                 duplicate.urgency === "emergency"
                 ? "Already raised, and it still has NOT been delivered. Do not " +
                   "tell the subject anyone has been notified. Tell them in one " +
-                  "sentence to call 911 now and their study site directly, then " +
+                  `sentence to call ${emergencyPhrase(region)} now and their ` +
+                  "study site directly, then " +
                   "call complete_check_in with ended_early true. Ask nothing further."
                 : "Already raised, and it still has NOT been delivered. Do not " +
                   "tell the subject anyone has been notified. Tell them to call " +
@@ -1455,7 +1462,8 @@ const handlers: Record<string, Handler> = {
             urgency === "emergency"
             ? "The page did NOT go through. Do not tell the subject their " +
               "coordinator has been alerted — that is not true. Tell them in one " +
-              "sentence to call 911 now, and to call their study site directly " +
+              `sentence to call ${emergencyPhrase(region)} now, and to call their ` +
+              "study site directly " +
               "afterwards. Then call complete_check_in with ended_early true."
             : urgency === "urgent"
               ? "The page did NOT go through. Do not say a coordinator has been " +

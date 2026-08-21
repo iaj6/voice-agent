@@ -14,6 +14,7 @@ import {
   type SafetyNetHit,
 } from "../clinical/safety.ts";
 import { PROTOCOL } from "../clinical/protocol.ts";
+import { localise, regionFor, type Region } from "../clinical/locale.ts";
 import {
   nextEscalationId,
   saveSession,
@@ -194,10 +195,15 @@ function safetyNetSystemMessage(
   hits: SafetyNetHit[],
   delivered: boolean,
   escalationId: string,
+  region: Region,
 ): string {
+  // Rules carry placeholders and stay country-free; the numbers are resolved
+  // here, once, where the subject is known. Duplicating rule text per country
+  // would mean six copies of the self-harm instruction drifting apart.
   const lines = hits.map(
     (h) =>
-      `- [${h.urgency.toUpperCase()}] ${h.category} (matched: "${h.matchedPhrase}"). ${h.instruction}`,
+      `- [${h.urgency.toUpperCase()}] ${h.category} (matched: "${h.matchedPhrase}"). ` +
+      localise(h.instruction, region),
   );
   // What the agent may claim depends on what actually happened. Telling someone
   // in an emergency that their coordinator knows, when nobody has been reached,
@@ -402,7 +408,12 @@ export async function* runTurn(
       );
       session.messages.push({
         role: "system",
-        content: safetyNetSystemMessage(hits, everDelivered, alreadyRaised.id),
+        content: safetyNetSystemMessage(
+          hits,
+          everDelivered,
+          alreadyRaised.id,
+          regionFor(session.subject?.siteCountry),
+        ),
       });
     } else {
     const record = {
@@ -460,7 +471,12 @@ export async function* runTurn(
     // Operator channel. The subject cannot forge this and it survives caching.
     session.messages.push({
       role: "system",
-      content: safetyNetSystemMessage(hits, delivery.delivered, record.id),
+      content: safetyNetSystemMessage(
+        hits,
+        delivery.delivered,
+        record.id,
+        regionFor(session.subject?.siteCountry),
+      ),
     });
     }
   }

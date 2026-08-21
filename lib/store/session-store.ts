@@ -89,6 +89,7 @@ interface StoredRecord {
   provenanceRejections: number;
   refusedQuotes: string[];
   resumable: boolean;
+  synthetic?: boolean;
 }
 
 /**
@@ -188,6 +189,7 @@ function toRecord(session: CheckInSession): StoredRecord {
     provenanceRejections: session.provenanceRejections,
     refusedQuotes: session.refusedQuotes,
     resumable: session.resumable,
+    synthetic: session.synthetic,
   };
 }
 
@@ -213,6 +215,7 @@ function blankSession(id: string): CheckInSession {
     summary: null,
     completedAt: null,
     shredded: false,
+    synthetic: false,
     audit: new AuditTrail(id),
   };
 }
@@ -512,6 +515,7 @@ class PostgresSessionStore implements SessionStore {
         ? new Date(row.completed_at as string).toISOString()
         : null,
       shredded: key === null && (await getKeyStore().state(id)) === "destroyed",
+      synthetic: record.synthetic ?? false,
       audit: rehydrateSealed(
         id,
         key,

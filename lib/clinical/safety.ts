@@ -186,7 +186,7 @@ interface NetRule {
  */
 const EMERGENCY_INSTRUCTION =
   "Stop the check-in script immediately. Tell the subject in one short sentence " +
-  "to hang up and call 911 (or their local emergency number) right now. Do not " +
+  "to hang up and call {{EMERGENCY_NUMBER}} right now. Do not " +
   "ask further screening questions. Do not offer reassurance, interpretation, or " +
   "medical advice. Call " +
   "escalate_to_coordinator with urgency 'emergency' if you have not already.";
@@ -243,11 +243,16 @@ const NET_RULES: NetRule[] = [
       /\bbetter off dead\b/i,
     ],
     instruction:
+      // Two things were wrong here at once. The crisis line was hardcoded to a
+      // US number, so a participant anywhere else was being sent to a line that
+      // does not answer them — worse than saying nothing, because they will try
+      // it. And it asserted "you are alerting their study coordinator now",
+      // which is a claim about a mail transport; EMERGENCY_INSTRUCTION had that
+      // removed when delivery was built and this rule was missed.
       "Stop the check-in script immediately. Respond with warmth in one or two " +
-      "short sentences, tell the subject they can reach the 988 Suicide and Crisis " +
-      "Lifeline by calling or texting 988, and that you are alerting their study " +
-      "coordinator now. Do not attempt counseling, risk assessment, or " +
-      "problem-solving. Call escalate_to_coordinator with urgency 'emergency'.",
+      "short sentences and tell the subject they can reach {{CRISIS_LINE}}. Do " +
+      "not attempt counseling, risk assessment, or problem-solving. Call " +
+      "escalate_to_coordinator with urgency 'emergency'.",
   },
   {
     category: "Severe bleeding",

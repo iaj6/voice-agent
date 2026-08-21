@@ -209,7 +209,20 @@ async function attemptDelivery(
 
   let providerId: string;
   try {
-    ({ providerId } = await transport.send({ ...message, to, onCall: options.onCall ?? false }));
+    if (session.synthetic) {
+      // Recorded in full, sent to nobody. The eval harness drives the same
+      // escalation path the console does, so without this every `npm run
+      // eval:fast` pages a real coordinator three times — and a test suite that
+      // emails a human on every run is one people stop running. The delivery row
+      // still shows exactly what would have gone out and to whom.
+      providerId = "suppressed:synthetic-session";
+    } else {
+      ({ providerId } = await transport.send({
+        ...message,
+        to,
+        onCall: options.onCall ?? false,
+      }));
+    }
   } catch (err) {
     const detail =
       err instanceof DeliveryFailure ? err.detail : `unexpected error: ${String(err)}`;

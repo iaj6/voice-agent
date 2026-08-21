@@ -16,12 +16,17 @@ export async function POST(request: Request) {
   // as a request field.
   const evalControlsAllowed = process.env.NODE_ENV !== "production";
   let resumable = true;
+  // Marks a session the eval harness created. Escalations on it are recorded and
+  // never actually sent — see deliver.ts. Dev-only, like resumable:false, and for
+  // the same reason: a request field that changes safety behaviour has no
+  // business being reachable in production.
+  let synthetic = false;
 
   const raw = await request.text();
   if (raw.trim() !== "") {
-    let body: { resumable?: unknown };
+    let body: { resumable?: unknown; synthetic?: unknown };
     try {
-      body = JSON.parse(raw) as { resumable?: unknown };
+      body = JSON.parse(raw) as { resumable?: unknown; synthetic?: unknown };
     } catch {
       // Distinguished from an empty body on purpose. Swallowing this meant a
       // malformed harness request silently became a resumable session, and the
@@ -30,6 +35,19 @@ export async function POST(request: Request) {
         { error: "Request body is not valid JSON" },
         { status: 400 },
       );
+    }
+    if (body?.synthetic === true) {
+      if (!evalControlsAllowed) {
+        return NextResponse.json(
+          {
+            error:
+              "synthetic:true is a development-only control and cannot be set " +
+              "on this deployment.",
+          },
+          { status: 403 },
+        );
+      }
+      synthetic = true;
     }
     if (body?.resumable === false) {
       if (!evalControlsAllowed) {
@@ -45,7 +63,7 @@ export async function POST(request: Request) {
       resumable = false;
     }
   }
-  const session = await createSession({ resumable });
+  const session = await createSession({ resumable, synthetic });
   return NextResponse.json({
     session: snapshot(session),
     protocol: {

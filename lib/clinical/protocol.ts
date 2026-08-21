@@ -182,6 +182,12 @@ export interface Subject {
   initials: string;
   siteId: string;
   siteName: string;
+  /**
+   * ISO 3166-1 alpha-2 for the site, which decides which emergency and crisis
+   * numbers the agent may say out loud. Sites, not subjects: a participant is
+   * enrolled at a site and that is where their care is.
+   */
+  siteCountry: string;
   cohort: string;
   enrollmentDate: string;
   studyDay: number;
@@ -206,6 +212,7 @@ export const SUBJECTS: Subject[] = [
     initials: "R.M.",
     siteId: "001",
     siteName: "Northlake Cancer Center",
+    siteCountry: "US",
     cohort: "Cohort B",
     enrollmentDate: "2026-06-24",
     studyDay: 29,
@@ -223,6 +230,7 @@ export const SUBJECTS: Subject[] = [
     initials: "T.A.",
     siteId: "001",
     siteName: "Northlake Cancer Center",
+    siteCountry: "US",
     cohort: "Cohort B",
     enrollmentDate: "2026-07-15",
     studyDay: 15,
@@ -240,6 +248,7 @@ export const SUBJECTS: Subject[] = [
     initials: "E.K.",
     siteId: "002",
     siteName: "Riverbend Oncology Associates",
+    siteCountry: "GB",
     cohort: "Cohort A",
     enrollmentDate: "2026-05-02",
     studyDay: 57,
@@ -260,6 +269,7 @@ export const SUBJECTS: Subject[] = [
     initials: "J.N.",
     siteId: "002",
     siteName: "Riverbend Oncology Associates",
+    siteCountry: "GB",
     cohort: "Cohort A",
     enrollmentDate: "2026-07-28",
     studyDay: 22,

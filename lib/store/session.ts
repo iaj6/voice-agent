@@ -126,6 +126,16 @@ export interface CheckInSession {
    * destroyed this" from "there was nothing here".
    */
   shredded: boolean;
+  /**
+   * True for sessions the eval harness created.
+   *
+   * Escalations on a synthetic session are recorded in full and never actually
+   * sent. Without this, `npm run eval:fast` pages a real coordinator three times
+   * per run — the harness drives the same escalation path the console does, and
+   * that path now delivers for real. A test suite that emails a human on every
+   * run is a test suite people stop running.
+   */
+  synthetic: boolean;
   audit: AuditTrail;
 }
 
@@ -138,9 +148,10 @@ export interface CheckInSession {
  * on the other end of.
  */
 export async function createSession(
-  options: { resumable?: boolean } = {},
+  options: { resumable?: boolean; synthetic?: boolean } = {},
 ): Promise<CheckInSession> {
   const session = await getSessionStore().create();
+  if (options.synthetic === true) session.synthetic = true;
   if (options.resumable === false) {
     session.resumable = false;
     await getSessionStore().save(session);

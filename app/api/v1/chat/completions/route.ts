@@ -1,3 +1,4 @@
+import { emergencyPhrase, regionFor } from "@/lib/clinical/locale";
 import { runTurn } from "@/lib/agent/runner";
 import {
   createSession,
@@ -8,6 +9,26 @@ import {
 import { appendFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+
+/**
+ * What the agent says when a turn breaks.
+ *
+ * Promises nothing this system can keep. One of the two places this fired used
+ * to say "Your study coordinator will call you", which is a claim a broken turn
+ * is in no position to make — and it fired on exactly the paths where nobody had
+ * been reached. The emergency number comes from the subject's site, falling back
+ * to "your local emergency number" when verification has not happened yet, which
+ * is common here: a turn that broke early may not have got that far.
+ */
+function brokenTurnLine(session: { subject?: { siteCountry?: string } | null }): string {
+  const region = regionFor(session.subject?.siteCountry);
+  return (
+    "I'm sorry, something has gone wrong on my end and I can't continue. " +
+    `Please call your study site directly, and call ${emergencyPhrase(region)} ` +
+    "if this is an emergency."
+  );
+}
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -253,7 +274,7 @@ export async function POST(request: Request) {
                   // in no position to make — and it fired on exactly the paths
                   // where nobody had been reached.
                   content:
-                    "I'm sorry, something has gone wrong on my end and I can't continue. Please call your study site directly, and call 911 if this is an emergency.",
+                    brokenTurnLine(session),
                 }),
               );
               spoke = true;
@@ -266,7 +287,7 @@ export async function POST(request: Request) {
           send(
             sseChunk(completionId, model, {
               content:
-                "I'm sorry, something has gone wrong on my end. Your study coordinator will call you.",
+                brokenTurnLine(session),
             }),
           );
         }
