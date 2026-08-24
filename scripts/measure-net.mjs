@@ -13,7 +13,8 @@
  *   node scripts/measure-net.mjs --min-sensitivity=0.50  # exit non-zero below the floor
  */
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { scanForSafetySignals, assertedHits } from "../lib/clinical/safety.ts";
 
 const C = {
@@ -29,6 +30,9 @@ const corpus = JSON.parse(
 ).utterances;
 
 const showMisses = process.argv.includes("--misses");
+const record = process.argv.includes("--record");
+const showHistory = process.argv.includes("--history");
+const HISTORY_FILE = new URL("../docs/net-history.jsonl", import.meta.url);
 
 /**
  * Regression floors, not targets.
@@ -118,6 +122,104 @@ for (const topic of topics.sort()) {
   console.log(`    ${topic.padEnd(24)} ${col(bar)} ${col(`${caught}/${sub.length}`)}`);
 }
 
+/**
+ * Sensitivity over time, kept in the repository.
+ *
+ * A single number is a fact about today; the trend is the thing that tells you
+ * whether a change helped, and whether a later change quietly undid it. Kept as
+ * a committed file rather than a local artefact because the interesting
+ * comparison is across commits, and a history that lives on one laptop cannot
+ * make it.
+ *
+ * Recorded explicitly with --record rather than on every run, so an afternoon of
+ * exploratory measurement does not bury the points that mean something.
+ */
+function readHistory() {
+  try {
+    return readFileSync(HISTORY_FILE, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function gitSha() {
+  try {
+    return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function recordPoint() {
+  const point = {
+    at: new Date().toISOString(),
+    commit: gitSha(),
+    n: rows.length,
+    signals: tp + fn,
+    tp,
+    fn,
+    fp,
+    tn,
+    sensitivity: Number(sensitivity.toFixed(4)),
+    specificity: Number(specificity.toFixed(4)),
+    byTopic: Object.fromEntries(
+      topics.map((topic) => {
+        const inTopic = rows.filter((r) => r.shouldFire && r.topic === topic);
+        return [topic, [inTopic.filter((r) => r.outcome === "TP").length, inTopic.length]];
+      }),
+    ),
+  };
+  appendFileSync(HISTORY_FILE, JSON.stringify(point) + "\n");
+  console.log(`  ${C.dim(`recorded: ${point.commit} · n=${point.n}`)}\n`);
+}
+
+function printHistory() {
+  const points = readHistory();
+  if (points.length === 0) {
+    console.log(`\n  ${C.dim("no history recorded yet — run with --record")}\n`);
+    return;
+  }
+
+  console.log(`\n  ${C.bold("Sensitivity over time")}`);
+  let previous = null;
+  for (const point of points) {
+    const pct = point.sensitivity * 100;
+    // Bar is scaled to the metric, not to the best point so far: a chart that
+    // rescales makes every run look like progress.
+    const bar = "█".repeat(Math.round(pct / 5)).padEnd(20, "·");
+    const delta =
+      previous === null
+        ? "     "
+        : (() => {
+            const d = (point.sensitivity - previous) * 100;
+            if (Math.abs(d) < 0.05) return C.dim("  ==  ");
+            return d > 0 ? C.good(`+${d.toFixed(1)}pt`) : C.bad(`${d.toFixed(1)}pt`);
+          })();
+    console.log(
+      `    ${point.at.slice(0, 10)}  ${point.commit.padEnd(9)} ${bar} ` +
+        `${pct.toFixed(1).padStart(5)}%  ${delta}  ${C.dim(`n=${point.n}`)}`,
+    );
+    previous = point.sensitivity;
+  }
+
+  // Sensitivity rising while the corpus shrinks is not an improvement, and the
+  // two numbers side by side are the only way to see that.
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (points.length > 1) {
+    const dSens = (last.sensitivity - first.sensitivity) * 100;
+    const dN = last.n - first.n;
+    console.log(
+      `\n    ${C.dim("since first record:")} ${dSens >= 0 ? "+" : ""}${dSens.toFixed(1)}pt ` +
+        `${C.dim(`on ${dN >= 0 ? "+" : ""}${dN} utterances`)}`,
+    );
+  }
+  console.log("");
+}
+
 const misses = rows.filter((r) => r.outcome === "FN");
 const spurious = rows.filter((r) => r.outcome === "FP");
 
@@ -168,3 +270,6 @@ console.log(
   `\n  ${C.dim("a human reviews every escalation. Read sensitivity as: if the model")}` +
   `\n  ${C.dim("misses this utterance entirely, does anything else catch it?")}\n`,
 );
+
+if (record) recordPoint();
+if (showHistory) printHistory();

@@ -31,6 +31,9 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { appendFileSync } from "node:fs";
+import { PROTOCOL } from "../lib/clinical/protocol.ts";
+
+const PROTOCOL_SCREEN_ITEMS = PROTOCOL.safetyScreen.length;
 
 const BASE = process.env.VOICE_AGENT_URL ?? "http://localhost:3100";
 
@@ -767,8 +770,16 @@ async function runPersona(key, verbose) {
   }
 
   const failed = checks.filter((c) => !c.ok).length;
+  const truncations = (snapshot?.audit ?? []).filter(
+    (e) => e.action === "TURN_TRUNCATED",
+  ).length;
+  const stacked = agentLines.filter((l) => (l.match(/\?/g) ?? []).length > 1).length;
   return {
     key,
+    turns: agentLines.length,
+    endedEarly: Boolean(spec.expect?.endsEarly),
+    truncations,
+    stacked,
     total: checks.length,
     failed,
     lines: out,
@@ -912,6 +923,61 @@ const agentCost = costOf(SPEND.agent);
 const personaCost = costOf(SPEND.persona);
 const totalCost = agentCost + personaCost;
 const tok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
+
+// 3.2 — burden, stated rather than implied. Coverage is bought in turns, and a
+// participant on a weekly call pays for every screen item that gets added.
+const turns = results.reduce((n, r) => n + (r.turns ?? 0), 0);
+if (results.length > 0) {
+  const screenItems = PROTOCOL_SCREEN_ITEMS;
+  console.log(`\n${C.bold("━━ burden")}`);
+  for (const r of results) {
+    console.log(`  ${r.key.padEnd(20)} ${String(r.turns ?? 0).padStart(3)} agent turns`);
+  }
+  // Split, because averaging them says nothing. A call that ends on an emergency
+  // never reaches the screen, so folding it into the mean understates the burden
+  // of the thing being measured — which is what a full check-in costs a
+  // participant, not what an aborted one costs.
+  const completed = results.filter((r) => !r.endedEarly);
+  const aborted = results.length - completed.length;
+  const completedTurns = completed.reduce((n, r) => n + (r.turns ?? 0), 0);
+  console.log(
+    C.dim(
+      completed.length > 0
+        ? `  ${(completedTurns / completed.length).toFixed(1)} turns for a call that runs to the end ` +
+          `(${completed.length} of ${results.length}); the directed screen is ${screenItems} of them, ` +
+          `asked one at a time.`
+        : `  Every persona in this run ended early, so none reached the screen. Its ` +
+          `${screenItems} items are ${screenItems} turns a completed call must pay.`,
+    ),
+  );
+  if (aborted > 0) {
+    console.log(
+      C.dim(`  ${aborted} ended early (emergency or failed verification) and never reached it.`),
+    );
+  }
+}
+
+// 3.5 — fabrication as a rate, not a verdict. The model attempts to write the
+// subject's side constantly; what matters is how often, and whether the guard
+// caught it. A pass/fail hides both.
+const truncations = results.reduce((n, r) => n + (r.truncations ?? 0), 0);
+const stacked = results.reduce((n, r) => n + (r.stacked ?? 0), 0);
+if (turns > 0) {
+  console.log(`\n${C.bold("━━ fabrication")}`);
+  const rate = (n) => `${((n / turns) * 100).toFixed(1)}%`;
+  console.log(
+    `  ${String(truncations).padStart(3)} turns cut by the boundary guard   ${C.dim(rate(truncations) + " of turns")}`,
+  );
+  console.log(
+    `  ${String(stacked).padStart(3)} turns that stacked questions       ${C.dim(rate(stacked) + " of turns")}`,
+  );
+  console.log(
+    C.dim(
+      "  Cut turns are the guard working, not failures. A rate that climbs is the\n" +
+        "  signal; a rate of zero across many runs would mean the guard stopped firing.",
+    ),
+  );
+}
 
 if (SPEND.agent.calls + SPEND.persona.calls > 0) {
   console.log(`\n${C.bold("━━ spend")}`);

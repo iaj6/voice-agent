@@ -100,12 +100,70 @@ export const PROTOCOL: ProtocolDefinition = {
     },
     {
       /**
+       * Stroke, asked in the words a person would use about themselves.
+       *
+       * Added because the deterministic net catches 5 of 22 stroke utterances in
+       * the corpus, and the ones it misses are the ordinary ones — "my arm went
+       * dead", "my words came out wrong". You cannot pattern-match your way to
+       * that. Asking outright is the only thing that reliably works, which is why
+       * the screen exists at all.
+       */
+      id: "stroke_signs",
+      label: "Sudden neurological symptoms",
+      prompt:
+        "Have you had any sudden weakness or numbness on one side, trouble speaking, or a sudden very bad headache?",
+      redFlag: true,
+      urgencyIfPositive: "emergency",
+    },
+    {
+      /**
+       * Severe cutaneous reaction and angioedema.
+       *
+       * Emergency rather than urgent: Stevens-Johnson and toxic epidermal
+       * necrolysis start as a rash and a fever and are lethal, and airway
+       * swelling has no useful waiting period. "Blistering or peeling" is the
+       * phrasing that distinguishes them from the ordinary drug rash a subject on
+       * an oncology trial will otherwise report every week.
+       */
+      id: "severe_skin",
+      label: "Severe skin reaction or swelling",
+      prompt:
+        "Have you had any rash that's blistering or peeling, or any swelling of your face, lips or tongue?",
+      redFlag: true,
+      urgencyIfPositive: "emergency",
+    },
+    {
+      /**
+       * Intent to stop, asked before the adherence question rather than after.
+       *
+       * Urgent, not emergency: this needs the investigator to know today, not an
+       * ambulance. The net catches 2 of 21 withdrawal utterances — the worst
+       * topic in the corpus — because people say "I've had enough of these
+       * tablets", not "I intend to withdraw from the study". Asking directly also
+       * separates it cleanly from missed doses, which is a different fact about a
+       * different problem.
+       */
+      id: "study_drug_intent",
+      label: "Intent to stop treatment or leave the study",
+      prompt:
+        "Have you thought about stopping the study medication, or about leaving the study?",
+      redFlag: true,
+      urgencyIfPositive: "urgent",
+    },
+    {
+      /**
        * Deliberately an open probe rather than a direct question about self-harm.
        * Asking a cancer patient about suicidal thoughts weekly, cold, over the
        * phone, is not something to improvise — production should use a validated
        * distress instrument (PHQ-2, or the NCCN Distress Thermometer) with its
        * own scoring and its own IRB approval. This wording opens the door and
        * lets the safety net and the agent handle what comes back.
+       *
+       * Left as an open probe when the other three items were added in Sprint 3,
+       * deliberately. Self-harm is the one topic where the honest answer is a
+       * validated instrument and an ethics submission rather than a question an
+       * engineer wrote, and closing the coverage gap by inventing wording would
+       * have been worse than leaving it open and saying so.
        */
       id: "spirits",
       label: "Mood and distress",

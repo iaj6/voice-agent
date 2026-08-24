@@ -13,6 +13,7 @@
     "db:verify-replay": "node scripts/db-verify-replay.mjs",
     "warm-speech": "node scripts/warm-speech.mjs",
     "measure-net": "node scripts/measure-net.mjs",
+    "measure-net:history": "node scripts/measure-net.mjs --history",
     "eval": "node scripts/simulate.mjs",
     "eval:fast": "node scripts/simulate.mjs --fast",
     "eval:stability": "node scripts/simulate.mjs --fast --repeat=5",
