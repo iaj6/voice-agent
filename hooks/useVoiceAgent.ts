@@ -15,7 +15,7 @@ import {
 } from "@/lib/voice/browser-speech";
 import { ElevenLabsSynthesizer } from "@/lib/voice/elevenlabs-speech";
 import { VOICE_NAME } from "@/lib/voice/tts-config";
-import type { SpeechRecognizer, SpeechSynthesizer } from "@/lib/voice/types";
+import type { Heard, SpeechRecognizer, SpeechSynthesizer } from "@/lib/voice/types";
 import type { SafetyNetHit } from "@/lib/clinical/safety";
 import type { SessionSnapshot } from "@/lib/store/session";
 import { isEchoOfRecentSpeech, looksLikeEcho } from "@/lib/voice/echo";
@@ -72,6 +72,7 @@ export function useVoiceAgent() {
   const [safetyHits, setSafetyHits] = useState<SafetyNetHit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [echoSuppressed, setEchoSuppressed] = useState(0);
+  const [lowestConfidence, setLowestConfidence] = useState<number | null>(null);
   const [voiceFallbacks, setVoiceFallbacks] = useState(0);
   const [neuralVoice, setNeuralVoice] = useState(true);
   const [usage, setUsage] = useState<UsageTotals>({
@@ -285,7 +286,15 @@ export function useVoiceAgent() {
   );
 
   const handleFinal = useCallback(
-    (text: string) => {
+    (heard: Heard) => {
+      const text = heard.text;
+      // Kept so a symptom heard poorly can be confirmed before it is recorded.
+      // The same string at 0.4 and at 0.98 is not the same fact.
+      if (heard.minConfidence !== null) {
+        setLowestConfidence((current) =>
+          current === null ? heard.minConfidence : Math.min(current, heard.minConfidence!),
+        );
+      }
       const recent = synthRef.current?.recentText() ?? "";
       if (isEchoOfRecentSpeech(text, recent)) {
         // The microphone heard the agent, not the subject. Never let this reach
@@ -435,7 +444,12 @@ export function useVoiceAgent() {
         synthRef.current?.cancel();
         abortRef.current?.abort();
       }
-      handleFinal(trimmed);
+      // Typed input: real words, no acoustic uncertainty to report.
+      handleFinal({
+        text: trimmed,
+        words: trimmed.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: null })),
+        minConfidence: null,
+      });
     },
     [handleFinal],
   );
@@ -450,6 +464,7 @@ export function useVoiceAgent() {
     safetyHits,
     usage,
     echoSuppressed,
+    lowestConfidence,
     voiceFallbacks,
     neuralVoice,
     setNeuralVoice,

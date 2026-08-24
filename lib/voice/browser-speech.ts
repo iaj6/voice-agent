@@ -5,6 +5,7 @@ import type {
   SpeechRecognizer,
   SpeechSynthesizer,
   SynthesizerCallbacks,
+  Heard,
 } from "./types.ts";
 
 // The Web Speech API is still not in lib.dom under every TS config, and Chrome
@@ -62,7 +63,25 @@ export function isSynthesisSupported(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+/** Wraps a bare transcript as a Heard with nothing claimed about confidence. */
+function withoutConfidence(text: string): Heard {
+  return {
+    text,
+    words: text.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: null })),
+    minConfidence: null,
+  };
+}
+
 export class BrowserRecognizer implements SpeechRecognizer {
+  /**
+   * The Web Speech API exposes a `confidence` on results, and Chrome populates
+   * it inconsistently — often 0 for interim results and a single figure for the
+   * whole alternative, never per word. Reporting it would be worse than
+   * reporting nothing, because a threshold would then be applied to a number
+   * that does not mean what it says.
+   */
+  readonly reportsConfidence = false;
+
   readonly supported: boolean;
   private recognition: SpeechRecognitionLike | null = null;
   private wantRunning = false;
@@ -113,7 +132,7 @@ export class BrowserRecognizer implements SpeechRecognizer {
         const text = result[0]?.transcript ?? "";
         if (result.isFinal) {
           const trimmed = text.trim();
-          if (trimmed) this.callbacks.onFinal(trimmed);
+          if (trimmed) this.callbacks.onFinal(withoutConfidence(trimmed));
         } else {
           interim += text;
         }

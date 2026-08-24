@@ -1,0 +1,1905 @@
+[
+  {
+    "reference": "I've had chest pain since last night and it's hard to breathe",
+    "hypothesis": "I've had chest pain since last night and it's hard to breathe.",
+    "topic": "cardiac_respiratory",
+    "kind": "direct",
+    "minWordConfidence": 0.89501953,
+    "words": [
+      {
+        "word": "I've",
+        "confidence": 1
+      },
+      {
+        "word": "had",
+        "confidence": 1
+      },
+      {
+        "word": "chest",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "pain",
+        "confidence": 1
+      },
+      {
+        "word": "since",
+        "confidence": 1
+      },
+      {
+        "word": "last",
+        "confidence": 1
+      },
+      {
+        "word": "night",
+        "confidence": 1
+      },
+      {
+        "word": "and",
+        "confidence": 0.89501953
+      },
+      {
+        "word": "it's",
+        "confidence": 1
+      },
+      {
+        "word": "hard",
+        "confidence": 1
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "breathe.",
+        "confidence": 0.9904785
+      }
+    ]
+  },
+  {
+    "reference": "the left side of my face feels funny and my smile looks crooked",
+    "hypothesis": "The left side of my face feels funny, and my smile looks crooked.",
+    "topic": "stroke",
+    "kind": "colloquial",
+    "minWordConfidence": 0.8310547,
+    "words": [
+      {
+        "word": "The",
+        "confidence": 1
+      },
+      {
+        "word": "left",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "side",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "face",
+        "confidence": 1
+      },
+      {
+        "word": "feels",
+        "confidence": 1
+      },
+      {
+        "word": "funny,",
+        "confidence": 0.8310547
+      },
+      {
+        "word": "and",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "smile",
+        "confidence": 1
+      },
+      {
+        "word": "looks",
+        "confidence": 1
+      },
+      {
+        "word": "crooked.",
+        "confidence": 1
+      }
+    ]
+  },
+  {
+    "reference": "the nosebleed went on for nearly an hour before it settled",
+    "hypothesis": "The nosebleed went on for nearly an hour before it settled.",
+    "topic": "bleeding",
+    "kind": "colloquial",
+    "minWordConfidence": 0.9944661,
+    "words": [
+      {
+        "word": "The",
+        "confidence": 1
+      },
+      {
+        "word": "nosebleed",
+        "confidence": 0.9944661
+      },
+      {
+        "word": "went",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "for",
+        "confidence": 1
+      },
+      {
+        "word": "nearly",
+        "confidence": 1
+      },
+      {
+        "word": "an",
+        "confidence": 1
+      },
+      {
+        "word": "hour",
+        "confidence": 1
+      },
+      {
+        "word": "before",
+        "confidence": 1
+      },
+      {
+        "word": "it",
+        "confidence": 1
+      },
+      {
+        "word": "settled.",
+        "confidence": 0.99853516
+      }
+    ]
+  },
+  {
+    "reference": "I ended up in the emergency room on Tuesday night",
+    "hypothesis": "I ended up in the emergency room on Tuesday night.",
+    "topic": "hospitalization",
+    "kind": "direct",
+    "minWordConfidence": 0.9707031,
+    "words": [
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "ended",
+        "confidence": 1
+      },
+      {
+        "word": "up",
+        "confidence": 1
+      },
+      {
+        "word": "in",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "emergency",
+        "confidence": 1
+      },
+      {
+        "word": "room",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "Tuesday",
+        "confidence": 1
+      },
+      {
+        "word": "night.",
+        "confidence": 0.9707031
+      }
+    ]
+  },
+  {
+    "reference": "I want to withdraw from the study",
+    "hypothesis": "I want to withdraw from the study.",
+    "topic": "withdrawal",
+    "kind": "direct",
+    "minWordConfidence": 0.6298828,
+    "words": [
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "want",
+        "confidence": 0.6298828
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "withdraw",
+        "confidence": 1
+      },
+      {
+        "word": "from",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 0.9604492
+      },
+      {
+        "word": "study.",
+        "confidence": 1
+      }
+    ]
+  },
+  {
+    "reference": "I had a fever years ago, and now I have one again",
+    "hypothesis": "I had a fever years ago and now I have one again.",
+    "topic": "fever",
+    "kind": "compound",
+    "minWordConfidence": 0.93359375,
+    "words": [
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "had",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "fever",
+        "confidence": 1
+      },
+      {
+        "word": "years",
+        "confidence": 1
+      },
+      {
+        "word": "ago",
+        "confidence": 1
+      },
+      {
+        "word": "and",
+        "confidence": 0.93359375
+      },
+      {
+        "word": "now",
+        "confidence": 1
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "have",
+        "confidence": 1
+      },
+      {
+        "word": "one",
+        "confidence": 1
+      },
+      {
+        "word": "again.",
+        "confidence": 0.9880371
+      }
+    ]
+  },
+  {
+    "reference": "Right, let me think, Monday I did the garden, Tuesday nothing much, Wednesday my son came round and we had a bit of a to-do about the car, and that night I woke up short of breath, propped myself up on two pillows in the end, Thursday I was fine, Friday I went to bingo.",
+    "hypothesis": "Right, let me think. Monday, I did the garden. Tuesday, nothing much. Wednesday, my son came round and we had a bit of a to do about the car. And that night, I woke up short of breath. Propped myself up on two pillows in the end. Thursday, I was fine. Friday, I went to bingo.",
+    "topic": "cardiac_respiratory",
+    "kind": "compound",
+    "minWordConfidence": 0.7363281,
+    "words": [
+      {
+        "word": "Right,",
+        "confidence": 0.98950195
+      },
+      {
+        "word": "let",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "me",
+        "confidence": 1
+      },
+      {
+        "word": "think.",
+        "confidence": 0.95458984
+      },
+      {
+        "word": "Monday,",
+        "confidence": 0.7849121
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "did",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "garden.",
+        "confidence": 0.9885254
+      },
+      {
+        "word": "Tuesday,",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "nothing",
+        "confidence": 1
+      },
+      {
+        "word": "much.",
+        "confidence": 0.99853516
+      },
+      {
+        "word": "Wednesday,",
+        "confidence": 0.9921875
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "son",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "came",
+        "confidence": 1
+      },
+      {
+        "word": "round",
+        "confidence": 0.9526367
+      },
+      {
+        "word": "and",
+        "confidence": 0.7363281
+      },
+      {
+        "word": "we",
+        "confidence": 1
+      },
+      {
+        "word": "had",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "bit",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "to",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "do",
+        "confidence": 0.9892578
+      },
+      {
+        "word": "about",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "car.",
+        "confidence": 0.97143555
+      },
+      {
+        "word": "And",
+        "confidence": 1
+      },
+      {
+        "word": "that",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "night,",
+        "confidence": 0.8647461
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "woke",
+        "confidence": 1
+      },
+      {
+        "word": "up",
+        "confidence": 1
+      },
+      {
+        "word": "short",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "breath.",
+        "confidence": 0.86572266
+      },
+      {
+        "word": "Propped",
+        "confidence": 0.9946289
+      },
+      {
+        "word": "myself",
+        "confidence": 1
+      },
+      {
+        "word": "up",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "two",
+        "confidence": 1
+      },
+      {
+        "word": "pillows",
+        "confidence": 1
+      },
+      {
+        "word": "in",
+        "confidence": 0.99121094
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "end.",
+        "confidence": 0.99194336
+      },
+      {
+        "word": "Thursday,",
+        "confidence": 0.9802246
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "was",
+        "confidence": 1
+      },
+      {
+        "word": "fine.",
+        "confidence": 0.9753418
+      },
+      {
+        "word": "Friday,",
+        "confidence": 1
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "went",
+        "confidence": 1
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "bingo.",
+        "confidence": 0.9977214
+      }
+    ]
+  },
+  {
+    "reference": "Let me think — appetite's been poor, I've dropped a bit of weight, my trousers are loose, and there was that headache Thursday, come on like someone hit me with a plank, worst I've ever had, I was sick in the sink with it, but I've had migraines all my life so, and the blood pressure cuff you gave me is playing up.",
+    "hypothesis": "Let me think, appetite's been poor, I've dropped a bit of weight, my trousers are loose... And there was that headache Thursday. Come on, like someone hit me with a plank, worst I've ever had, I was sick in the sink with it. But I've had migraines all my life so... And the blood pressure cuff you gave me is playing up.",
+    "topic": "stroke",
+    "kind": "compound",
+    "minWordConfidence": 0.6933594,
+    "words": [
+      {
+        "word": "Let",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "me",
+        "confidence": 1
+      },
+      {
+        "word": "think,",
+        "confidence": 0.78759766
+      },
+      {
+        "word": "appetite's",
+        "confidence": 0.9975586
+      },
+      {
+        "word": "been",
+        "confidence": 1
+      },
+      {
+        "word": "poor,",
+        "confidence": 0.98950195
+      },
+      {
+        "word": "I've",
+        "confidence": 0.9995117
+      },
+      {
+        "word": "dropped",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "bit",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "weight,",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "trousers",
+        "confidence": 1
+      },
+      {
+        "word": "are",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "loose...",
+        "confidence": 0.76586914
+      },
+      {
+        "word": "And",
+        "confidence": 0.8798828
+      },
+      {
+        "word": "there",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "was",
+        "confidence": 1
+      },
+      {
+        "word": "that",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "headache",
+        "confidence": 1
+      },
+      {
+        "word": "Thursday.",
+        "confidence": 0.8779297
+      },
+      {
+        "word": "Come",
+        "confidence": 0.9086914
+      },
+      {
+        "word": "on,",
+        "confidence": 0.9909668
+      },
+      {
+        "word": "like",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "someone",
+        "confidence": 0.9448242
+      },
+      {
+        "word": "hit",
+        "confidence": 1
+      },
+      {
+        "word": "me",
+        "confidence": 1
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "plank,",
+        "confidence": 0.92838544
+      },
+      {
+        "word": "worst",
+        "confidence": 0.97265625
+      },
+      {
+        "word": "I've",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "ever",
+        "confidence": 1
+      },
+      {
+        "word": "had,",
+        "confidence": 0.9091797
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "was",
+        "confidence": 1
+      },
+      {
+        "word": "sick",
+        "confidence": 0.9819336
+      },
+      {
+        "word": "in",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "sink",
+        "confidence": 0.9707031
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "it.",
+        "confidence": 0.9523926
+      },
+      {
+        "word": "But",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "I've",
+        "confidence": 0.9995117
+      },
+      {
+        "word": "had",
+        "confidence": 1
+      },
+      {
+        "word": "migraines",
+        "confidence": 1
+      },
+      {
+        "word": "all",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "life",
+        "confidence": 1
+      },
+      {
+        "word": "so...",
+        "confidence": 0.6933594
+      },
+      {
+        "word": "And",
+        "confidence": 0.9951172
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "blood",
+        "confidence": 1
+      },
+      {
+        "word": "pressure",
+        "confidence": 1
+      },
+      {
+        "word": "cuff",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "you",
+        "confidence": 1
+      },
+      {
+        "word": "gave",
+        "confidence": 1
+      },
+      {
+        "word": "me",
+        "confidence": 1
+      },
+      {
+        "word": "is",
+        "confidence": 1
+      },
+      {
+        "word": "playing",
+        "confidence": 1
+      },
+      {
+        "word": "up.",
+        "confidence": 0.93603516
+      }
+    ]
+  },
+  {
+    "reference": "I've been sleeping better since I moved the telly out of the bedroom, my daughter's idea, she's full of ideas that one, and the tablets I'm taking with breakfast now instead of at night, no upset stomach at all, though there was blood in the toilet bowl yesterday morning and again today, quite a lot of it, red, and I keep meaning to mention it, and my son's coming Sunday so that's nice.",
+    "hypothesis": "I've been sleeping better since I moved the telly out of the bedroom. My daughter's idea. She's full of ideas that one. And the tablets I'm taking with breakfast now instead of at night, no upset stomach at all. Though there was blood in the toilet bowl yesterday morning and again today. Quite a lot of it. Red. And I keep meaning to mention it. And my son's coming Sunday, so that's nice.",
+    "topic": "bleeding",
+    "kind": "compound",
+    "minWordConfidence": 0.51660156,
+    "words": [
+      {
+        "word": "I've",
+        "confidence": 1
+      },
+      {
+        "word": "been",
+        "confidence": 1
+      },
+      {
+        "word": "sleeping",
+        "confidence": 1
+      },
+      {
+        "word": "better",
+        "confidence": 1
+      },
+      {
+        "word": "since",
+        "confidence": 1
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "moved",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "telly",
+        "confidence": 0.9890137
+      },
+      {
+        "word": "out",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "the",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "bedroom.",
+        "confidence": 0.94873047
+      },
+      {
+        "word": "My",
+        "confidence": 1
+      },
+      {
+        "word": "daughter's",
+        "confidence": 1
+      },
+      {
+        "word": "idea.",
+        "confidence": 0.9609375
+      },
+      {
+        "word": "She's",
+        "confidence": 1
+      },
+      {
+        "word": "full",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "ideas",
+        "confidence": 1
+      },
+      {
+        "word": "that",
+        "confidence": 0.51660156
+      },
+      {
+        "word": "one.",
+        "confidence": 0.72717285
+      },
+      {
+        "word": "And",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "tablets",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "I'm",
+        "confidence": 0.9995117
+      },
+      {
+        "word": "taking",
+        "confidence": 1
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "breakfast",
+        "confidence": 1
+      },
+      {
+        "word": "now",
+        "confidence": 1
+      },
+      {
+        "word": "instead",
+        "confidence": 0.9838867
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "at",
+        "confidence": 1
+      },
+      {
+        "word": "night,",
+        "confidence": 0.8239746
+      },
+      {
+        "word": "no",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "upset",
+        "confidence": 1
+      },
+      {
+        "word": "stomach",
+        "confidence": 1
+      },
+      {
+        "word": "at",
+        "confidence": 1
+      },
+      {
+        "word": "all.",
+        "confidence": 0.83740234
+      },
+      {
+        "word": "Though",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "there",
+        "confidence": 0.9003906
+      },
+      {
+        "word": "was",
+        "confidence": 1
+      },
+      {
+        "word": "blood",
+        "confidence": 1
+      },
+      {
+        "word": "in",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "toilet",
+        "confidence": 1
+      },
+      {
+        "word": "bowl",
+        "confidence": 1
+      },
+      {
+        "word": "yesterday",
+        "confidence": 1
+      },
+      {
+        "word": "morning",
+        "confidence": 1
+      },
+      {
+        "word": "and",
+        "confidence": 0.9790039
+      },
+      {
+        "word": "again",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "today.",
+        "confidence": 0.7998047
+      },
+      {
+        "word": "Quite",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "lot",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "it.",
+        "confidence": 0.9506836
+      },
+      {
+        "word": "Red.",
+        "confidence": 0.85961914
+      },
+      {
+        "word": "And",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "keep",
+        "confidence": 1
+      },
+      {
+        "word": "meaning",
+        "confidence": 1
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "mention",
+        "confidence": 1
+      },
+      {
+        "word": "it.",
+        "confidence": 0.9797363
+      },
+      {
+        "word": "And",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "son's",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "coming",
+        "confidence": 1
+      },
+      {
+        "word": "Sunday,",
+        "confidence": 0.8293457
+      },
+      {
+        "word": "so",
+        "confidence": 1
+      },
+      {
+        "word": "that's",
+        "confidence": 1
+      },
+      {
+        "word": "nice.",
+        "confidence": 0.99902344
+      }
+    ]
+  },
+  {
+    "reference": "Well the pills are fine, I take them with my porridge like you said, though the packet's a devil to open with my hands the way they are, and — oh, I did go down in the kitchen Tuesday, just went out like a light for a minute or two, my daughter found me on the lino — anyway, no, no upset stomach at all, and I've been sleeping better since the weather turned.",
+    "hypothesis": "Well, the pills are fine. I take them with my porridge like you said, though the packet's a devil to open with my hands the way they are and... I did go down in the kitchen Tuesday, just went out like a light for a minute or two. My daughter found me on the lino. Anyway, no, no upset stomach at all. And I've been sleeping better since the weather turned.",
+    "topic": "loss_of_consciousness",
+    "kind": "compound",
+    "minWordConfidence": 0.56689453,
+    "words": [
+      {
+        "word": "Well,",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "pills",
+        "confidence": 1
+      },
+      {
+        "word": "are",
+        "confidence": 1
+      },
+      {
+        "word": "fine.",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "take",
+        "confidence": 0.9921875
+      },
+      {
+        "word": "them",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "porridge",
+        "confidence": 1
+      },
+      {
+        "word": "like",
+        "confidence": 0.6948242
+      },
+      {
+        "word": "you",
+        "confidence": 1
+      },
+      {
+        "word": "said,",
+        "confidence": 0.8300781
+      },
+      {
+        "word": "though",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "the",
+        "confidence": 0.97802734
+      },
+      {
+        "word": "packet's",
+        "confidence": 0.9733887
+      },
+      {
+        "word": "a",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "devil",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "open",
+        "confidence": 1
+      },
+      {
+        "word": "with",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "hands",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "the",
+        "confidence": 0.99121094
+      },
+      {
+        "word": "way",
+        "confidence": 1
+      },
+      {
+        "word": "they",
+        "confidence": 1
+      },
+      {
+        "word": "are",
+        "confidence": 1
+      },
+      {
+        "word": "and...",
+        "confidence": 0.56689453
+      },
+      {
+        "word": "I",
+        "confidence": 0.703125
+      },
+      {
+        "word": "did",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "go",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "down",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "in",
+        "confidence": 0.9453125
+      },
+      {
+        "word": "the",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "kitchen",
+        "confidence": 1
+      },
+      {
+        "word": "Tuesday,",
+        "confidence": 0.7409668
+      },
+      {
+        "word": "just",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "went",
+        "confidence": 1
+      },
+      {
+        "word": "out",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "like",
+        "confidence": 0.99609375
+      },
+      {
+        "word": "a",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "light",
+        "confidence": 1
+      },
+      {
+        "word": "for",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "a",
+        "confidence": 0.9921875
+      },
+      {
+        "word": "minute",
+        "confidence": 1
+      },
+      {
+        "word": "or",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "two.",
+        "confidence": 0.7504883
+      },
+      {
+        "word": "My",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "daughter",
+        "confidence": 1
+      },
+      {
+        "word": "found",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "me",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "on",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "the",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "lino.",
+        "confidence": 0.9583333
+      },
+      {
+        "word": "Anyway,",
+        "confidence": 0.95532227
+      },
+      {
+        "word": "no,",
+        "confidence": 0.7907715
+      },
+      {
+        "word": "no",
+        "confidence": 0.9951172
+      },
+      {
+        "word": "upset",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "stomach",
+        "confidence": 1
+      },
+      {
+        "word": "at",
+        "confidence": 0.9970703
+      },
+      {
+        "word": "all.",
+        "confidence": 0.7435303
+      },
+      {
+        "word": "And",
+        "confidence": 0.98828125
+      },
+      {
+        "word": "I've",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "been",
+        "confidence": 1
+      },
+      {
+        "word": "sleeping",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "better",
+        "confidence": 1
+      },
+      {
+        "word": "since",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "weather",
+        "confidence": 1
+      },
+      {
+        "word": "turned.",
+        "confidence": 0.9890137
+      }
+    ]
+  },
+  {
+    "reference": "It started with the itching and now the skin's lifting off in sheets on my arms, I've been putting a flannel on it but it's not doing much.",
+    "hypothesis": "It started with the itching, and now the skin's lifting off in sheets on my arms. I've been putting a flannel on it, but it's not doing much.",
+    "topic": "anaphylaxis_skin",
+    "kind": "colloquial",
+    "minWordConfidence": 0.9482422,
+    "words": [
+      {
+        "word": "It",
+        "confidence": 1
+      },
+      {
+        "word": "started",
+        "confidence": 1
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "itching,",
+        "confidence": 0.98339844
+      },
+      {
+        "word": "and",
+        "confidence": 1
+      },
+      {
+        "word": "now",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "skin's",
+        "confidence": 0.99853516
+      },
+      {
+        "word": "lifting",
+        "confidence": 1
+      },
+      {
+        "word": "off",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "in",
+        "confidence": 0.9482422
+      },
+      {
+        "word": "sheets",
+        "confidence": 0.9921875
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "arms.",
+        "confidence": 0.9909668
+      },
+      {
+        "word": "I've",
+        "confidence": 1
+      },
+      {
+        "word": "been",
+        "confidence": 1
+      },
+      {
+        "word": "putting",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "flannel",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "it,",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "but",
+        "confidence": 1
+      },
+      {
+        "word": "it's",
+        "confidence": 1
+      },
+      {
+        "word": "not",
+        "confidence": 1
+      },
+      {
+        "word": "doing",
+        "confidence": 1
+      },
+      {
+        "word": "much.",
+        "confidence": 0.99902344
+      }
+    ]
+  },
+  {
+    "reference": "There's a spot on my leg gone red and angry-looking, and it's warm to the touch, warmer than the rest.",
+    "hypothesis": "There's a spot on my leg gone red and angry looking, and it's warm to the touchwarmer than the rest.",
+    "topic": "fever",
+    "kind": "colloquial",
+    "minWordConfidence": 0.8979492,
+    "words": [
+      {
+        "word": "There's",
+        "confidence": 0.9995117
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "spot",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "my",
+        "confidence": 1
+      },
+      {
+        "word": "leg",
+        "confidence": 1
+      },
+      {
+        "word": "gone",
+        "confidence": 0.9941406
+      },
+      {
+        "word": "red",
+        "confidence": 1
+      },
+      {
+        "word": "and",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "angry",
+        "confidence": 1
+      },
+      {
+        "word": "looking,",
+        "confidence": 0.91503906
+      },
+      {
+        "word": "and",
+        "confidence": 1
+      },
+      {
+        "word": "it's",
+        "confidence": 1
+      },
+      {
+        "word": "warm",
+        "confidence": 1
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "touchwarmer",
+        "confidence": 0.8979492
+      },
+      {
+        "word": "than",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "rest.",
+        "confidence": 0.94677734
+      }
+    ]
+  },
+  {
+    "reference": "They sent one of those vans with the lights on to the house Sunday, and I had a lie down on a trolley for about six hours before anybody looked at me.",
+    "hypothesis": "They sent one of those vans with the lights on to the house Sunday, and I had to lie down on a trolley for about six hours before anybody looked at me.",
+    "topic": "hospitalization",
+    "kind": "colloquial",
+    "minWordConfidence": 0.8540039,
+    "words": [
+      {
+        "word": "They",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "sent",
+        "confidence": 1
+      },
+      {
+        "word": "one",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "those",
+        "confidence": 1
+      },
+      {
+        "word": "vans",
+        "confidence": 0.9951172
+      },
+      {
+        "word": "with",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "lights",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 0.8540039
+      },
+      {
+        "word": "to",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 1
+      },
+      {
+        "word": "house",
+        "confidence": 1
+      },
+      {
+        "word": "Sunday,",
+        "confidence": 0.98046875
+      },
+      {
+        "word": "and",
+        "confidence": 1
+      },
+      {
+        "word": "I",
+        "confidence": 1
+      },
+      {
+        "word": "had",
+        "confidence": 1
+      },
+      {
+        "word": "to",
+        "confidence": 0.9716797
+      },
+      {
+        "word": "lie",
+        "confidence": 1
+      },
+      {
+        "word": "down",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 0.99902344
+      },
+      {
+        "word": "trolley",
+        "confidence": 1
+      },
+      {
+        "word": "for",
+        "confidence": 1
+      },
+      {
+        "word": "about",
+        "confidence": 1
+      },
+      {
+        "word": "six",
+        "confidence": 1
+      },
+      {
+        "word": "hours",
+        "confidence": 1
+      },
+      {
+        "word": "before",
+        "confidence": 1
+      },
+      {
+        "word": "anybody",
+        "confidence": 1
+      },
+      {
+        "word": "looked",
+        "confidence": 1
+      },
+      {
+        "word": "at",
+        "confidence": 1
+      },
+      {
+        "word": "me.",
+        "confidence": 0.9995117
+      }
+    ]
+  },
+  {
+    "reference": "My daughter made me buy one of those little sticks from the chemist, and, well, there were two lines on it.",
+    "hypothesis": "My daughter made me buy one of those little sticks from the chemist and, well, there were two lines on it.",
+    "topic": "pregnancy",
+    "kind": "colloquial",
+    "minWordConfidence": 0.8364258,
+    "words": [
+      {
+        "word": "My",
+        "confidence": 1
+      },
+      {
+        "word": "daughter",
+        "confidence": 1
+      },
+      {
+        "word": "made",
+        "confidence": 1
+      },
+      {
+        "word": "me",
+        "confidence": 1
+      },
+      {
+        "word": "buy",
+        "confidence": 1
+      },
+      {
+        "word": "one",
+        "confidence": 1
+      },
+      {
+        "word": "of",
+        "confidence": 1
+      },
+      {
+        "word": "those",
+        "confidence": 1
+      },
+      {
+        "word": "little",
+        "confidence": 1
+      },
+      {
+        "word": "sticks",
+        "confidence": 1
+      },
+      {
+        "word": "from",
+        "confidence": 1
+      },
+      {
+        "word": "the",
+        "confidence": 0.9667969
+      },
+      {
+        "word": "chemist",
+        "confidence": 0.9980469
+      },
+      {
+        "word": "and,",
+        "confidence": 0.8364258
+      },
+      {
+        "word": "well,",
+        "confidence": 0.9848633
+      },
+      {
+        "word": "there",
+        "confidence": 1
+      },
+      {
+        "word": "were",
+        "confidence": 1
+      },
+      {
+        "word": "two",
+        "confidence": 1
+      },
+      {
+        "word": "lines",
+        "confidence": 1
+      },
+      {
+        "word": "on",
+        "confidence": 1
+      },
+      {
+        "word": "it.",
+        "confidence": 0.99853516
+      }
+    ]
+  },
+  {
+    "reference": "Some mornings I wake up and think, well, that's a shame, I'm still here.",
+    "hypothesis": "Some mornings I wake up and think, well, that's a shame I'm still here.",
+    "topic": "self_harm",
+    "kind": "colloquial",
+    "minWordConfidence": 0.7150879,
+    "words": [
+      {
+        "word": "Some",
+        "confidence": 1
+      },
+      {
+        "word": "mornings",
+        "confidence": 1
+      },
+      {
+        "word": "I",
+        "confidence": 0.98828125
+      },
+      {
+        "word": "wake",
+        "confidence": 1
+      },
+      {
+        "word": "up",
+        "confidence": 1
+      },
+      {
+        "word": "and",
+        "confidence": 1
+      },
+      {
+        "word": "think,",
+        "confidence": 0.9941406
+      },
+      {
+        "word": "well,",
+        "confidence": 0.9946289
+      },
+      {
+        "word": "that's",
+        "confidence": 1
+      },
+      {
+        "word": "a",
+        "confidence": 1
+      },
+      {
+        "word": "shame",
+        "confidence": 1
+      },
+      {
+        "word": "I'm",
+        "confidence": 0.77441406
+      },
+      {
+        "word": "still",
+        "confidence": 1
+      },
+      {
+        "word": "here.",
+        "confidence": 0.7150879
+      }
+    ]
+  }
+]
