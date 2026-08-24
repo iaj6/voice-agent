@@ -30,10 +30,10 @@ export const maxDuration = 300;
  * `duplex: "half"` on the browser side, which is Chromium-only — the same
  * constraint the Web Speech API already imposed, so nothing is lost.
  */
-const DEEPGRAM_PARAMS = {
+const deepgramParams = (sampleRate: number) => ({
   model: process.env.DEEPGRAM_MODEL ?? "nova-3-medical",
   encoding: "linear16",
-  sample_rate: "16000",
+  sample_rate: String(sampleRate),
   channels: "1",
   smart_format: "true",
   interim_results: "true",
@@ -41,7 +41,28 @@ const DEEPGRAM_PARAMS = {
   // agent does not sit in silence. Elderly participants pause mid-sentence.
   endpointing: "500",
   language: "en",
-};
+});
+
+/**
+ * The rate the browser actually produced, which is not always the rate we asked
+ * for. `AudioContext({ sampleRate })` is a request; some browsers hand back a
+ * 48 kHz context regardless. Declaring that audio as 16 kHz makes the recogniser
+ * transcribe it at triple speed as nonsense, with nothing anywhere reporting an
+ * error — so capture reads its real rate back and sends it, and this is where it
+ * is believed. Bounded because it arrives from the client.
+ */
+const RATE_RANGE = { min: 8_000, max: 96_000 };
+/** Matches `TARGET_SAMPLE_RATE` in capture.ts; not imported, because that module
+ *  reaches for `navigator` and belongs in the browser bundle. */
+const FALLBACK_SAMPLE_RATE = 16_000;
+
+function requestedRate(url: string): number {
+  const raw = Number(new URL(url).searchParams.get("rate"));
+  if (!Number.isFinite(raw) || raw < RATE_RANGE.min || raw > RATE_RANGE.max) {
+    return FALLBACK_SAMPLE_RATE;
+  }
+  return Math.round(raw);
+}
 
 /**
  * Bounds on how long one relay may live.
@@ -76,7 +97,7 @@ export async function POST(request: Request) {
   }
 
   const upstream = new WebSocket(
-    `wss://api.deepgram.com/v1/listen?${new URLSearchParams(DEEPGRAM_PARAMS)}`,
+    `wss://api.deepgram.com/v1/listen?${new URLSearchParams(deepgramParams(requestedRate(request.url)))}`,
     { headers: { Authorization: `Token ${key}` } } as unknown as string[],
   );
 
@@ -119,7 +140,18 @@ export async function POST(request: Request) {
       sink = controller;
 
       cap = setTimeout(() => {
-        send({ type: "error", message: "The recognition session exceeded its limit." });
+        // Rotating a session we chose to bound, not a failure — the client opens
+        // a fresh one. Reported as an error it surfaced to the operator as a red
+        // recognition-failure banner in the middle of a call where recognition
+        // was working fine.
+        //
+        // Flushed first, and in this order. `finish()` marks the stream closed,
+        // after which nothing more can be written — so closing the socket and
+        // letting the close listener do the flushing dropped whatever the
+        // participant was part-way through saying at the boundary.
+        const stranded = transcripts.onClose();
+        if (stranded) send({ type: "final", heard: stranded });
+        send({ type: "closed", reason: "session-cap" });
         try {
           upstream.close();
         } catch {

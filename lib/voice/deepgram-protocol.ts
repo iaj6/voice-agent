@@ -50,7 +50,16 @@ export function parseMessage(raw: unknown): Parsed {
 
   const alternative = message.channel?.alternatives?.[0];
   const text = (alternative?.transcript ?? "").trim();
-  if (!text) return { kind: "ignore", heard: null };
+  if (!text) {
+    // An endpoint marker carrying no words. Deepgram emits these — measured, two
+    // of them after a four-second silence — and one still means the person
+    // stopped talking, which is the signal that completes whatever came before
+    // it. Discarding it because it has no text of its own strands the sentences
+    // that do.
+    return message.speech_final
+      ? { kind: "final", heard: null }
+      : { kind: "ignore", heard: null };
+  }
 
   const words: HeardWord[] = (alternative?.words ?? []).map((w) => ({
     word: w.punctuated_word ?? w.word,
@@ -201,14 +210,22 @@ export function createTranscriptStream() {
     /** Returns what to emit, if anything. */
     onMessage(raw: unknown): Parsed {
       const parsed = parseMessage(raw);
-      if (parsed.kind === "ignore" || !parsed.heard) return { kind: "ignore", heard: null };
+      if (parsed.kind === "ignore") return { kind: "ignore", heard: null };
 
       if (parsed.kind === "final") {
-        const whole = joinHeard([...settled, parsed.heard]);
+        // `heard` is null when the endpoint marker carried no words of its own.
+        // It still ends the turn — everything settled before it is the turn.
+        const parts = [
+          ...settled,
+          ...(parsed.heard ? [parsed.heard] : pending ? [pending] : []),
+        ];
         settled = [];
         pending = null;
-        return { kind: "final", heard: whole };
+        if (!parts.length) return { kind: "ignore", heard: null };
+        return { kind: "final", heard: joinHeard(parts) };
       }
+
+      if (!parsed.heard) return { kind: "ignore", heard: null };
 
       if (parsed.kind === "segment") {
         // Settled, but the person is still talking. Anything the recogniser had

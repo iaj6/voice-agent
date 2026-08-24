@@ -62,6 +62,8 @@ export class RelayRecognizer implements SpeechRecognizer {
   /** Bumped per session, so a superseded run cannot clobber a live one. */
   private generation = 0;
   private failures = 0;
+  /** Whether the relay has ever worked in this browser, against this deployment. */
+  private everDelivered = false;
   private disposed = false;
 
   constructor(
@@ -120,10 +122,14 @@ export class RelayRecognizer implements SpeechRecognizer {
     this.inFlight = controller;
 
     let delivered = false;
-    let unavailable = false;
+    /** The relay cannot be used here, as opposed to this session having ended. */
+    let unusable = false;
 
     try {
-      const response = await fetch("/api/stt/stream", {
+      // The rate the microphone actually produced, which the relay has no other
+      // way to learn — and declaring the wrong one turns the whole transcript
+      // into nonsense without raising an error anywhere.
+      const response = await fetch(`/api/stt/stream?rate=${capture.settings.sampleRate}`, {
         method: "POST",
         body: capture.frames,
         // Chromium-only, which `supported` above tests for directly.
@@ -134,19 +140,30 @@ export class RelayRecognizer implements SpeechRecognizer {
 
       if (!response.ok || !response.body) {
         const detail = await response.text().catch(() => "");
-        // Not a browser difference but a deployment one: the relay is running
-        // and has no transcription credential. Retrying cannot fix that, and a
-        // participant with no microphone at all is worse than one on the older
-        // recogniser, so hand the decision back to the caller.
-        unavailable = response.status === 503;
         throw new Error(detail.slice(0, 160) || `relay returned ${response.status}`);
       }
-      await this.readEvents(response.body, () => {
+      await this.readEvents(gen, response.body, () => {
         delivered = true;
+        this.everDelivered = true;
         this.failures = 0;
       });
     } catch (err) {
-      if (!controller.signal.aborted && gen === this.generation && !unavailable) {
+      // Anything that goes wrong before a single transcript arrives means the
+      // relay does not work here, whatever the reason — no credential, a
+      // platform that buffers the request body, a transport that refuses to
+      // stream one. Chrome only streams a request body over HTTP/2, and no
+      // feature test can see that in advance, so the first attempt is the test.
+      //
+      // Narrowing this to a 503 left every other failure ending in "could not be
+      // re-established" and no recogniser at all — worse than the one this
+      // replaced, which is the outcome the fallback exists to prevent.
+      //
+      // Only on the first attempt, though. Once the relay has produced a
+      // transcript we know it works here, and a later failure is a dropped
+      // session rather than a verdict on the browser — retrying that is right,
+      // and downgrading the whole call over one blip is not.
+      unusable = !controller.signal.aborted && !delivered && !this.everDelivered;
+      if (!controller.signal.aborted && gen === this.generation && !unusable) {
         this.callbacks.onError(
           `Speech recognition stopped: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -162,7 +179,7 @@ export class RelayRecognizer implements SpeechRecognizer {
         this.capture = null;
         this.inFlight = null;
 
-        if (unavailable) {
+        if (unusable) {
           this.wantRunning = false;
           this.callbacks.onEnd();
           this.onUnavailable?.();
@@ -191,9 +208,11 @@ export class RelayRecognizer implements SpeechRecognizer {
   private resume(gen: number, delivered: boolean): void {
     this.failures = delivered ? 0 : this.failures + 1;
     if (this.failures > MAX_RECONNECTS) {
+      // Out of attempts. Hand back rather than stopping here: no microphone at
+      // all is the worst available outcome, and the older recogniser still works.
       this.wantRunning = false;
-      this.callbacks.onError("Speech recognition could not be re-established.");
       this.callbacks.onEnd();
+      this.onUnavailable?.();
       return;
     }
     setTimeout(() => {
@@ -203,6 +222,7 @@ export class RelayRecognizer implements SpeechRecognizer {
   }
 
   private async readEvents(
+    gen: number,
     body: ReadableStream<Uint8Array>,
     onDelivered: () => void,
   ): Promise<void> {
@@ -213,6 +233,8 @@ export class RelayRecognizer implements SpeechRecognizer {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      // A superseded or disposed session must not still be talking to the agent.
+      if (gen !== this.generation) return;
       buffer += decoder.decode(value, { stream: true });
 
       const frames = buffer.split("\n\n");

@@ -13,6 +13,10 @@ const captures: { stopped: boolean }[] = [];
 let openSessions = 0;
 /** Resolved by the test to end a relay session, standing in for the server. */
 let endSession: (() => void) | null = null;
+/** Pushes an SSE event into the open session, standing in for the recogniser. */
+let deliver: ((type: string, text: string) => void) | null = null;
+/** Makes the next fetch fail, standing in for a dropped session. */
+let failNext = false;
 
 mock.module("../lib/voice/capture.ts", {
   // `exports` replaced `namedExports` in the runtime API; the shipped type
@@ -44,7 +48,12 @@ const { RelayRecognizer } = await import("../lib/voice/relay-speech.ts");
 
 /** A relay that stays open until the test lets it end. */
 function stubFetch(status = 200) {
+  failNext = false;
   globalThis.fetch = (async () => {
+    if (failNext) {
+      failNext = false;
+      throw new TypeError("network error");
+    }
     if (status !== 200) {
       return new Response(JSON.stringify({ error: "no key" }), { status });
     }
@@ -52,6 +61,13 @@ function stubFetch(status = 200) {
     return new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
+          const encoder = new TextEncoder();
+          deliver = (type, text) =>
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type, heard: { text, words: [], minConfidence: null } })}\n\n`,
+              ),
+            );
           endSession = () => {
             openSessions -= 1;
             try {
@@ -157,6 +173,33 @@ test("a relay with no credential gives up instead of retrying a metered socket",
   assert.equal(unavailable, 1, "the caller is told once, so it can fall back");
   assert.equal(captures.length, 1, "and it did not reconnect in a loop");
   assert.equal(captures[0].stopped, true);
+  recognizer.dispose();
+});
+
+test("a relay that has worked before retries instead of downgrading the call", async () => {
+  // A dropped session mid-call is not a verdict on the browser. Falling back on
+  // the first blip would cost the rest of the check-in its per-word confidence,
+  // which is what the read-back is thresholded on.
+  captures.length = 0;
+  stubFetch();
+  let unavailable = 0;
+  const recognizer = new RelayRecognizer(callbacks(), {
+    onUnavailable: () => {
+      unavailable += 1;
+    },
+  });
+
+  recognizer.start();
+  await settle();
+  deliver?.("interim", "I have been");
+  await settle();
+
+  failNext = true;
+  endSession?.();
+  await new Promise((r) => setTimeout(r, 500));
+
+  assert.equal(unavailable, 0, "a working relay is not abandoned over one failure");
+  assert.ok(captures.length >= 2, "it tried again");
   recognizer.dispose();
 });
 

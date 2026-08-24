@@ -315,6 +315,24 @@ export function useVoiceAgent() {
       }
 
       setInterim("");
+
+      // The call is over and this arrived anyway. endCall() stops the recogniser
+      // rather than aborting it, on purpose — the relay still owes a final for
+      // whatever was said last, and that trailing sentence is the one a
+      // participant says as they hang up. But the session is already closed, so
+      // sendTurn would drop it silently while the console showed it sitting in
+      // the transcript exactly like every captured line.
+      //
+      // A record that displays an utterance it did not capture is worse than one
+      // that admits it, so say so and hand the words to the coordinator.
+      if (!sessionIdRef.current) {
+        setError(
+          `Heard after the call ended, so it was not recorded: "${text}". ` +
+            `Add it to the record by hand if it matters.`,
+        );
+        return;
+      }
+
       const line: TranscriptLine = {
         id: `subject-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         role: "subject",

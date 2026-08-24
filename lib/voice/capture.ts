@@ -45,14 +45,27 @@ export async function startCapture(): Promise<Capture> {
   const track = media.getAudioTracks()[0];
   const applied = track?.getSettings() ?? {};
 
-  // Constructed at the recogniser's rate so the browser resamples in native
-  // code. Some browsers ignore the hint, which is why the real rate is read back
-  // and reported rather than assumed.
-  const context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-  await context.audioWorklet.addModule("/pcm-worklet.js");
-
-  const source = context.createMediaStreamSource(media);
-  const worklet = new AudioWorkletNode(context, "pcm-worklet");
+  // Everything past this point can fail with the microphone already granted and
+  // live — an undeployed worklet, an offline reload, a CSP that blocks it. The
+  // caller sees a thrown error and reports it, but nothing would stop the
+  // tracks: the browser's recording indicator stays lit for the life of the
+  // page, on a call where the participant has been told the microphone is off.
+  let context: AudioContext | null = null;
+  let source: MediaStreamAudioSourceNode;
+  let worklet: AudioWorkletNode;
+  try {
+    // Constructed at the recogniser's rate so the browser resamples in native
+    // code. Some browsers ignore the hint, which is why the real rate is read
+    // back and reported rather than assumed.
+    context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    await context.audioWorklet.addModule("/pcm-worklet.js");
+    source = context.createMediaStreamSource(media);
+    worklet = new AudioWorkletNode(context, "pcm-worklet");
+  } catch (err) {
+    for (const t of media.getTracks()) t.stop();
+    void context?.close().catch(() => {});
+    throw err;
+  }
 
   let push: ((chunk: Uint8Array) => void) | null = null;
   let closeStream: (() => void) | null = null;
@@ -86,6 +99,7 @@ export async function startCapture(): Promise<Capture> {
   // Deliberately not connected to the destination. Routing the microphone to the
   // speakers is how a call becomes a feedback loop.
 
+  const audio = context;
   let stopped = false;
   function stop() {
     if (stopped) return;
@@ -98,7 +112,7 @@ export async function startCapture(): Promise<Capture> {
       /* already torn down */
     }
     for (const t of media.getTracks()) t.stop();
-    void context.close();
+    void audio.close();
     closeStream?.();
   }
 
@@ -108,7 +122,7 @@ export async function startCapture(): Promise<Capture> {
       echoCancellation: applied.echoCancellation === true,
       noiseSuppression: applied.noiseSuppression === true,
       autoGainControl: applied.autoGainControl === true,
-      sampleRate: context.sampleRate,
+      sampleRate: audio.sampleRate,
       channelCount: applied.channelCount ?? 1,
     },
     stop,

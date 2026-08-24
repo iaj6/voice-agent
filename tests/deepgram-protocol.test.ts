@@ -138,6 +138,27 @@ test("confidence from an early segment survives into the joined turn", () => {
   assert.deepEqual(needsConfirmation(turn.heard!, ["blood"]), ["blood"]);
 });
 
+test("an endpoint marker with no words still completes the turn", () => {
+  // Measured on the live socket: after four seconds of silence Deepgram sent two
+  // speech_final messages carrying no transcript at all. Ignoring them because
+  // they are empty strands every settled segment behind them — the same shape of
+  // loss as delivering only the last sentence.
+  const stream = createTranscriptStream();
+  stream.onMessage(segment(LONG_ANSWER[0], false));
+  const turn = stream.onMessage(segment("", true));
+  assert.equal(turn.kind, "final");
+  assert.equal(turn.heard?.text, LONG_ANSWER[0]);
+  assert.equal(stream.onClose(), null, "and it is not delivered a second time");
+});
+
+test("an endpoint marker with nothing behind it delivers nothing", () => {
+  // The trailing markers during silence, once the turn has already gone out.
+  const stream = createTranscriptStream();
+  stream.onMessage(segment(LONG_ANSWER[0], true));
+  assert.equal(stream.onMessage(segment("", true)).kind, "ignore");
+  assert.equal(stream.onMessage(segment("", true)).kind, "ignore");
+});
+
 test("segments abandoned when the line drops are still flushed", () => {
   const stream = createTranscriptStream();
   stream.onMessage(segment(LONG_ANSWER[0], false));
