@@ -139,6 +139,34 @@ test("the final a draining session flushes still reaches the agent", async () =>
   recognizer.dispose();
 });
 
+test("an aborted session's final is not delivered into the next call", async () => {
+  // endCall() leaves the relay draining so the last sentence still arrives, and
+  // the server holds that socket for up to five seconds. Starting a second call
+  // inside that window must not let the previous participant's trailing sentence
+  // land in this participant's record — abort() is what cuts it, and a merely
+  // superseded session (stop/start within one call) must still deliver.
+  captures.length = 0;
+  stubFetch();
+  const finals: string[] = [];
+  const recognizer = new RelayRecognizer({
+    ...callbacks(),
+    onFinal: (heard) => finals.push(heard.text),
+  });
+
+  recognizer.start();
+  await settle();
+  recognizer.abort();
+  recognizer.start();
+  await settle();
+
+  sessions[0].deliver("final", "the previous participant's last sentence");
+  sessions[0].end();
+  await settle();
+
+  assert.deepEqual(finals, [], "nothing crossed from the aborted call");
+  recognizer.dispose();
+});
+
 test("a capture failure that is not a refused microphone hands back", async () => {
   // An undeployed worklet or a blocking CSP is specific to owning the audio
   // path. The older recogniser works fine in all of them, so ending the call

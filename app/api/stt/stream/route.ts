@@ -70,6 +70,19 @@ const deepgramParams = (sampleRate: number) => ({
  */
 const socketAgent = new Agent({ allowH2: false, connections: 32 });
 
+/**
+ * How many recognition sockets this instance will hold at once.
+ *
+ * The route is unauthenticated and every request opens a socket billed by
+ * connected time for up to four minutes, so without a ceiling one caller can
+ * spend the transcription account. This bounds the damage rather than preventing
+ * it — the count is per instance, so a serverless deployment multiplies it, and
+ * the real answer is authentication (recorded as 4.10). A pilot runs one call at
+ * a time; this is set well above that and well below anything expensive.
+ */
+const MAX_CONCURRENT_SESSIONS = 8;
+let liveSessions = 0;
+
 const RATE_RANGE = { min: 8_000, max: 96_000 };
 /** Matches `TARGET_SAMPLE_RATE` in capture.ts; not imported, because that module
  *  reaches for `navigator` and belongs in the browser bundle. */
@@ -114,7 +127,12 @@ export async function POST(request: Request) {
   if (!request.body) {
     return Response.json({ error: "Expected a streamed audio body." }, { status: 400 });
   }
-
+  if (liveSessions >= MAX_CONCURRENT_SESSIONS) {
+    return Response.json(
+      { error: "Too many recognition sessions are open. Try again in a moment." },
+      { status: 429 },
+    );
+  }
   const upstream = new WebSocket(
     `wss://api.deepgram.com/v1/listen?${new URLSearchParams(deepgramParams(requestedRate(request.url)))}`,
     {
@@ -122,6 +140,10 @@ export async function POST(request: Request) {
       dispatcher: socketAgent,
     } as unknown as string[],
   );
+  // Counted only once the socket exists, so a constructor that throws cannot
+  // leak a slot. Nothing awaits between the check above and here, so there is no
+  // window for a second request to slip through.
+  liveSessions += 1;
 
   const encoder = new TextEncoder();
   const transcripts = createTranscriptStream();
@@ -167,12 +189,20 @@ export async function POST(request: Request) {
    * Order matters: `send` is a no-op once `closed` is set, so the flush has to
    * happen before the flag.
    */
+  let counted = true;
+  const release = () => {
+    if (!counted) return;
+    counted = false;
+    liveSessions -= 1;
+  };
+
   const finish = () => {
     if (closed) return;
     const stranded = transcripts.onClose();
     if (stranded) send({ type: "final", heard: stranded });
     closed = true;
     clearTimeout(cap);
+    release();
     try {
       sink?.close();
     } catch {
@@ -213,7 +243,15 @@ export async function POST(request: Request) {
           const detail = (raw as { description?: string; message?: string }).description
             ?? (raw as { message?: string }).message
             ?? kind;
-          send({ type: "error", message: `The transcription service reported: ${detail}` });
+          // A warning is not a verdict on whether the relay works. Routing it
+          // through the same channel as an error made a single advisory frame
+          // downgrade the whole check-in to the browser recogniser — losing
+          // per-word confidence and echo cancellation over a notice. The client
+          // ignores `notice`; it is here so a log has it.
+          send({
+            type: kind === "Error" ? "error" : "notice",
+            message: `The transcription service reported: ${detail}`,
+          });
           return;
         }
 
@@ -288,6 +326,7 @@ export async function POST(request: Request) {
       // down, so the close and error events that follow do not try to write.
       closed = true;
       clearTimeout(cap);
+      release();
       closeUpstream();
     },
   });

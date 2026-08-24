@@ -447,6 +447,14 @@ export function useVoiceAgent() {
   }, [handleFinal, handleInterim, setCallState, neuralVoice]);
 
   const startCall = useCallback(async () => {
+    // Abort, not stop. endCall() leaves the relay draining on purpose so the
+    // participant's last sentence still arrives — but the server holds that
+    // socket for up to five seconds, and 4.8 records that the grace is often
+    // spent in full. Start a second call inside that window and the previous
+    // participant's trailing sentence arrives with a live session id in place,
+    // passes the post-call guard, and is written into this participant's record.
+    // Nothing downstream can tell the two apart, so the drain is cut here.
+    recognizerRef.current?.abort();
     setError(null);
     setTranscript([]);
     setToolCalls([]);

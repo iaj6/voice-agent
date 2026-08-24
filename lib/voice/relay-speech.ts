@@ -158,11 +158,15 @@ export class RelayRecognizer implements SpeechRecognizer {
       }
       await this.readEvents(
         gen,
+        controller,
         response.body,
         () => {
           delivered = true;
           this.everDelivered = true;
           this.failures = 0;
+          // Not sticky. Otherwise one frame ten seconds in still red-bannered a
+          // session that went on to transcribe normally until the cap rotated it.
+          relayError = null;
         },
         (message) => {
           relayError = message;
@@ -256,6 +260,7 @@ export class RelayRecognizer implements SpeechRecognizer {
 
   private async readEvents(
     gen: number,
+    controller: AbortController,
     body: ReadableStream<Uint8Array>,
     onDelivered: () => void,
     onRelayError: (message: string) => void,
@@ -267,7 +272,10 @@ export class RelayRecognizer implements SpeechRecognizer {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (this.disposed) return;
+      // Superseded is not the same as cancelled. A run that stop() left draining
+      // still owes its final; a run somebody aborted owes nothing, and must not
+      // still be talking — its words belong to a call that is over.
+      if (this.disposed || controller.signal.aborted) return;
       buffer += decoder.decode(value, { stream: true });
 
       const frames = buffer.split("\n\n");
