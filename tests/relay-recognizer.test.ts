@@ -77,7 +77,11 @@ function stubFetch(status = 200) {
           deliver = (type, text) =>
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ type, heard: { text, words: [], minConfidence: null } })}\n\n`,
+                `data: ${JSON.stringify(
+                  type === "error"
+                    ? { type, message: "the transcription service disconnected" }
+                    : { type, heard: { text, words: [], minConfidence: null } },
+                )}\n\n`,
               ),
             );
           endSession = () => {
@@ -269,6 +273,32 @@ test("a relay that has worked before retries instead of downgrading the call", a
 
   assert.equal(unavailable, 0, "a working relay is not abandoned over one failure");
   assert.ok(captures.length >= 2, "it tried again");
+  recognizer.dispose();
+});
+
+test("a relay that answers 200 and then errors hands back on the first try", async () => {
+  // A rotated key, a revoked scope and an exhausted quota all answer 200 and
+  // stream the error afterwards, so nothing throws. Treating only the throwing
+  // kind as fatal cost four fresh microphones, four metered sockets and four red
+  // banners before the fallback was offered.
+  captures.length = 0;
+  stubFetch();
+  let handedBack = 0;
+  let errors = 0;
+  const recognizer = new RelayRecognizer(
+    { ...callbacks(), onError: () => { errors += 1; } },
+    { onUnavailable: () => { handedBack += 1; } },
+  );
+
+  recognizer.start();
+  await settle();
+  sessions[0].deliver("error", "");
+  sessions[0].end();
+  await new Promise((r) => setTimeout(r, 500));
+
+  assert.equal(handedBack, 1, "the fallback is offered");
+  assert.equal(captures.length, 1, "and no retry storm");
+  assert.equal(errors, 0, "no banner for a failure we are recovering from");
   recognizer.dispose();
 });
 

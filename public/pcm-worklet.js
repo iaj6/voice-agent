@@ -10,6 +10,10 @@
  * of something the platform already does correctly.
  */
 class PcmWorklet extends AudioWorkletProcessor {
+  /**
+   * A sink: frames leave over the port, and nothing is written to `outputs`.
+   * The node is constructed with `numberOfOutputs: 0` to match.
+   */
   process(inputs) {
     const channel = inputs[0]?.[0];
     if (!channel) return true;

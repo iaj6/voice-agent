@@ -298,13 +298,6 @@ export function useVoiceAgent() {
   const handleFinal = useCallback(
     (heard: Heard) => {
       const text = heard.text;
-      // Kept so a symptom heard poorly can be confirmed before it is recorded.
-      // The same string at 0.4 and at 0.98 is not the same fact.
-      if (heard.minConfidence !== null) {
-        setLowestConfidence((current) =>
-          current === null ? heard.minConfidence : Math.min(current, heard.minConfidence!),
-        );
-      }
       const recent = synthRef.current?.recentText() ?? "";
       if (isEchoOfRecentSpeech(text, recent)) {
         // The microphone heard the agent, not the subject. Never let this reach
@@ -331,6 +324,17 @@ export function useVoiceAgent() {
             `Add it to the record by hand if it matters.`,
         );
         return;
+      }
+
+      // Only now, past the echo and post-call guards. This is the number 4.3's
+      // read-back threshold gets judged against, so it has to be a minimum over
+      // what the participant actually said — not over the agent's own voice
+      // coming back through the microphone, nor over finals that arrived after
+      // the call ended and were explicitly not recorded.
+      if (heard.minConfidence !== null) {
+        setLowestConfidence((current) =>
+          current === null ? heard.minConfidence : Math.min(current, heard.minConfidence!),
+        );
       }
 
       const line: TranscriptLine = {
@@ -421,7 +425,14 @@ export function useVoiceAgent() {
         const fallback = new BrowserRecognizer(callbacks);
         recognizerRef.current = fallback;
         setCaptureSettings(null);
-        if (stateRef.current === "listening") fallback.start();
+        // Not gated on "listening". The relay's first failure lands moments
+        // after startCall, while the opening turn is still being generated — so
+        // the state is "thinking" or "speaking" almost every time. In half-duplex
+        // sendTurn's tail would restart it anyway, but with barge-in on the
+        // recogniser is started exactly once, in startCall, and a fallback
+        // installed after that moment would never run: a whole check-in with a
+        // dead microphone and a console reading "listening".
+        if (stateRef.current !== "ended" && sessionIdRef.current) fallback.start();
       },
     });
     recognizerRef.current = relay.supported ? relay : new BrowserRecognizer(callbacks);

@@ -146,6 +146,14 @@ export async function POST(request: Request) {
     }
   };
 
+  const closeUpstream = () => {
+    try {
+      upstream.close();
+    } catch {
+      /* already gone */
+    }
+  };
+
   const finish = () => {
     if (closed) return;
     closed = true;
@@ -174,11 +182,7 @@ export async function POST(request: Request) {
         const stranded = transcripts.onClose();
         if (stranded) send({ type: "final", heard: stranded });
         send({ type: "closed", reason: "session-cap" });
-        try {
-          upstream.close();
-        } catch {
-          /* already gone */
-        }
+        closeUpstream();
         finish();
       }, MAX_SESSION_MS);
       cap.unref?.();
@@ -236,16 +240,22 @@ export async function POST(request: Request) {
         // trailing utterance still gets a final.
         upstream.send(JSON.stringify({ type: "CloseStream" }));
         setTimeout(() => {
-          if (upstream.readyState === WebSocket.OPEN) {
-            try {
-              upstream.close();
-            } catch {
-              /* already gone */
-            }
-          }
+          // Drain before closing, for the same reason the cap path does. This
+          // timer exists precisely for a recogniser that never sends the final —
+          // measured, three settled segments and no final at all — and calling
+          // finish() first made the close listener's flush a silent no-op,
+          // throwing away the last thing the participant said.
+          const stranded = transcripts.onClose();
+          if (stranded) send({ type: "final", heard: stranded });
+          closeUpstream();
           finish();
         }, FLUSH_GRACE_MS).unref?.();
       } else {
+        // Reached when the read loop stopped because the stream was already
+        // closed — including from send()'s catch, where neither cancel() nor
+        // finish() ran. The socket has to be closed on every way out or it stays
+        // connected and billed until the cap timer notices.
+        closeUpstream();
         finish();
       }
     },
@@ -255,11 +265,7 @@ export async function POST(request: Request) {
       // down, so the close and error events that follow do not try to write.
       closed = true;
       clearTimeout(cap);
-      try {
-        upstream.close();
-      } catch {
-        /* nothing to do */
-      }
+      closeUpstream();
     },
   });
 

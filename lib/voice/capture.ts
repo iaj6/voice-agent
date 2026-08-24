@@ -60,7 +60,14 @@ export async function startCapture(): Promise<Capture> {
     context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
     await context.audioWorklet.addModule("/pcm-worklet.js");
     source = context.createMediaStreamSource(media);
-    worklet = new AudioWorkletNode(context, "pcm-worklet");
+    // Zero outputs, because it has none: it posts frames over its port and
+    // writes no audio. A node that declares an output it never fills, and that
+    // nothing is connected to, is not reachable from the destination the render
+    // graph pulls from — so `process()` may never be called at all, which looks
+    // exactly like a working microphone producing silence. Declaring it a sink
+    // is what makes it one, rather than relying on how a given browser treats a
+    // dangling output.
+    worklet = new AudioWorkletNode(context, "pcm-worklet", { numberOfOutputs: 0 });
   } catch (err) {
     for (const t of media.getTracks()) t.stop();
     void context?.close().catch(() => {});
@@ -96,8 +103,9 @@ export async function startCapture(): Promise<Capture> {
     push?.(new Uint8Array(event.data as ArrayBuffer));
   };
   source.connect(worklet);
-  // Deliberately not connected to the destination. Routing the microphone to the
-  // speakers is how a call becomes a feedback loop.
+  // Nothing downstream, deliberately: routing the microphone to the speakers is
+  // how a call becomes a feedback loop. The node above is a sink, so it is
+  // pulled without needing a path to the destination.
 
   const audio = context;
   let stopped = false;

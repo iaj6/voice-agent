@@ -135,6 +135,9 @@ export class RelayRecognizer implements SpeechRecognizer {
     let delivered = false;
     /** The relay cannot be used here, as opposed to this session having ended. */
     let unusable = false;
+    let threw: unknown = null;
+    /** An error the relay streamed on an otherwise successful response. */
+    let relayError: string | null = null;
 
     try {
       // The rate the microphone actually produced, which the relay has no other
@@ -153,12 +156,20 @@ export class RelayRecognizer implements SpeechRecognizer {
         const detail = await response.text().catch(() => "");
         throw new Error(detail.slice(0, 160) || `relay returned ${response.status}`);
       }
-      await this.readEvents(gen, response.body, () => {
-        delivered = true;
-        this.everDelivered = true;
-        this.failures = 0;
-      });
+      await this.readEvents(
+        gen,
+        response.body,
+        () => {
+          delivered = true;
+          this.everDelivered = true;
+          this.failures = 0;
+        },
+        (message) => {
+          relayError = message;
+        },
+      );
     } catch (err) {
+      threw = err;
       // Anything that goes wrong before a single transcript arrives means the
       // relay does not work here, whatever the reason — no credential, a
       // platform that buffers the request body, a transport that refuses to
@@ -173,13 +184,24 @@ export class RelayRecognizer implements SpeechRecognizer {
       // transcript we know it works here, and a later failure is a dropped
       // session rather than a verdict on the browser — retrying that is right,
       // and downgrading the whole call over one blip is not.
-      unusable = !controller.signal.aborted && !delivered && !this.everDelivered;
-      if (!controller.signal.aborted && gen === this.generation && !unusable) {
-        this.callbacks.onError(
-          `Speech recognition stopped: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
     } finally {
+      // The relay can fail two ways and only one of them throws. A rotated key,
+      // a revoked scope or an exhausted quota all answer 200 and *then* stream
+      // an error before closing, so readEvents returns normally. Treating only
+      // the throwing kind as fatal meant a dead key produced four fresh
+      // microphones, four relay sessions, four metered Deepgram sockets and four
+      // red banners before the fallback was finally offered.
+      const failed = threw !== null || relayError !== null;
+      unusable =
+        failed && !controller.signal.aborted && !delivered && !this.everDelivered;
+
+      if (failed && !unusable && !controller.signal.aborted && gen === this.generation) {
+        const detail =
+          relayError ??
+          (threw instanceof Error ? threw.message : String(threw));
+        this.callbacks.onError(`Speech recognition stopped: ${detail}`);
+      }
+
       // This run's microphone stops with this run, on every path out. A relay
       // that ended early — no credential, an upstream error, the session cap —
       // otherwise left the recording indicator on and the worklet pushing into a
@@ -236,6 +258,7 @@ export class RelayRecognizer implements SpeechRecognizer {
     gen: number,
     body: ReadableStream<Uint8Array>,
     onDelivered: () => void,
+    onRelayError: (message: string) => void,
   ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -275,7 +298,9 @@ export class RelayRecognizer implements SpeechRecognizer {
           onDelivered();
           this.callbacks.onFinal(event.heard);
         } else if (event.type === "error") {
-          this.callbacks.onError(event.message ?? "Speech recognition failed.");
+          // Reported by the caller once it knows whether this is a dead relay to
+          // hand back from or a blip to retry.
+          onRelayError(event.message ?? "Speech recognition failed.");
         }
       }
     }
