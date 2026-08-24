@@ -167,6 +167,38 @@ test("an aborted session's final is not delivered into the next call", async () 
   recognizer.dispose();
 });
 
+test("a drain orphaned turns ago is silenced too, not just the newest one", async () => {
+  // Half-duplex leaves a session draining on every turn, so by the time anyone
+  // aborts there are several in flight and only the newest is reachable by its
+  // own controller. Cancelling that one alone left every orphan behind it still
+  // delivering into whatever call came next.
+  captures.length = 0;
+  stubFetch();
+  const finals: string[] = [];
+  const recognizer = new RelayRecognizer({
+    ...callbacks(),
+    onFinal: (heard) => finals.push(heard.text),
+  });
+
+  // Three turns of an ordinary half-duplex call.
+  for (let turn = 0; turn < 3; turn++) {
+    recognizer.start();
+    await settle();
+    recognizer.stop();
+  }
+  recognizer.abort();
+  recognizer.start();
+  await settle();
+
+  // The oldest orphan flushes what it was holding.
+  sessions[0].deliver("final", "the previous participant's last sentence");
+  sessions[0].end();
+  await settle();
+
+  assert.deepEqual(finals, [], "no orphan reached the new call");
+  recognizer.dispose();
+});
+
 test("a capture failure that is not a refused microphone hands back", async () => {
   // An undeployed worklet or a blocking CSP is specific to owning the audio
   // path. The older recogniser works fine in all of them, so ending the call

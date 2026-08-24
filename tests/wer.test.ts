@@ -95,3 +95,24 @@ test("an empty transcript loses everything", () => {
   assert.equal(wordErrorRate("I have had chest pain", "").wer, 1);
   assert.equal(termRecall("I have had chest pain", "", TERMS).recall, 0);
 });
+
+test("contractions are expanded by rule, not by a list of seven", () => {
+  // A fixed list covered "don't" and not "haven't", so a perfectly correct
+  // transcription of "I haven't been able to breathe" scored 28.6% WER — style
+  // counted as inaccuracy, on a sentence a breathless participant is likely to
+  // say. Every contraction below is a real one from the corpus register.
+  const pairs: [string, string][] = [
+    ["I haven't been able to breathe", "I have not been able to breathe"],
+    ["you're sure it wasn't the pills", "you are sure it was not the pills"],
+    ["we've couldn't shouldn't didn't", "we have could not should not did not"],
+    ["I can't and I won't", "I cannot and I will not"],
+    ["it's worse than that's ever been", "it is worse than that is ever been"],
+  ];
+  for (const [spoken, expanded] of pairs) {
+    assert.equal(
+      wordErrorRate(spoken, expanded).wer,
+      0,
+      `"${spoken}" should cost nothing against "${expanded}"`,
+    );
+  }
+});

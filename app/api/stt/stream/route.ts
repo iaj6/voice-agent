@@ -168,6 +168,17 @@ export async function POST(request: Request) {
     }
   };
 
+  /**
+   * Hands over whatever the participant had said but the endpointer never
+   * closed. Idempotent — the accumulator empties itself — so a path that needs
+   * the final to precede something else can call it early and finish() will
+   * still cover every path that does not.
+   */
+  const drain = () => {
+    const stranded = transcripts.onClose();
+    if (stranded) send({ type: "final", heard: stranded });
+  };
+
   const closeUpstream = () => {
     try {
       upstream.close();
@@ -197,12 +208,15 @@ export async function POST(request: Request) {
   };
 
   const finish = () => {
-    if (closed) return;
-    const stranded = transcripts.onClose();
-    if (stranded) send({ type: "final", heard: stranded });
-    closed = true;
+    // Unconditional, and before the guard. send()'s catch sets `closed` on its
+    // own when the client vanishes mid-write, so a slot released only past this
+    // point was never released at all — and eight of those 429 the route for the
+    // life of the instance. Both are idempotent.
     clearTimeout(cap);
     release();
+    if (closed) return;
+    drain();
+    closed = true;
     try {
       sink?.close();
     } catch {
@@ -274,6 +288,12 @@ export async function POST(request: Request) {
       });
 
       upstream.addEventListener("error", () => {
+        // Drained first, so the final precedes the error rather than following
+        // it. The client clears a reported error as soon as a transcript
+        // arrives, so emitting the error first meant the flush erased it: an
+        // exhausted quota mid-utterance looked like a clean session end, with no
+        // banner and the first-attempt fallback quietly disabled.
+        drain();
         send({ type: "error", message: "The transcription service disconnected." });
         finish();
       });

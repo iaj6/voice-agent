@@ -56,7 +56,17 @@ export class RelayRecognizer implements SpeechRecognizer {
   private readonly onSettings?: (settings: CaptureSettings) => void;
   private readonly onUnavailable?: () => void;
   private capture: Capture | null = null;
-  private inFlight: AbortController | null = null;
+  /**
+   * Every live request, not just the newest.
+   *
+   * In half-duplex a session is left draining on every turn while the next one
+   * starts, so holding a single controller made each drained turn permanently
+   * unreachable — abort() cancelled only the most recent one and every orphan
+   * behind it kept delivering into whatever call came next.
+   */
+  private readonly inFlight = new Set<AbortController>();
+  /** Runs at or below this generation have been cancelled and must stay silent. */
+  private abortedThrough = 0;
   /** Whether the caller wants a live microphone right now. */
   private wantRunning = false;
   /** Bumped per session, so a superseded run cannot clobber a live one. */
@@ -130,7 +140,7 @@ export class RelayRecognizer implements SpeechRecognizer {
     this.callbacks.onStart();
 
     const controller = new AbortController();
-    this.inFlight = controller;
+    this.inFlight.add(controller);
 
     let delivered = false;
     /** The relay cannot be used here, as opposed to this session having ended. */
@@ -212,9 +222,10 @@ export class RelayRecognizer implements SpeechRecognizer {
       // stream nobody was reading.
       capture.stop();
 
+      this.inFlight.delete(controller);
+
       if (gen === this.generation) {
         this.capture = null;
-        this.inFlight = null;
 
         if (unusable) {
           this.wantRunning = false;
@@ -275,7 +286,11 @@ export class RelayRecognizer implements SpeechRecognizer {
       // Superseded is not the same as cancelled. A run that stop() left draining
       // still owes its final; a run somebody aborted owes nothing, and must not
       // still be talking — its words belong to a call that is over.
-      if (this.disposed || controller.signal.aborted) return;
+      //
+      // Checked against a watermark rather than only this run's own signal,
+      // because a drain orphaned several turns ago has a controller nobody holds
+      // any more. The watermark silences all of them at once.
+      if (this.disposed || gen <= this.abortedThrough || controller.signal.aborted) return;
       buffer += decoder.decode(value, { stream: true });
 
       const frames = buffer.split("\n\n");
@@ -330,12 +345,14 @@ export class RelayRecognizer implements SpeechRecognizer {
 
   abort(): void {
     this.wantRunning = false;
-    // Orphans any in-flight run, so its teardown cannot touch a newer session.
+    // Everything up to now is cancelled — including drains from earlier turns
+    // whose controllers are no longer reachable individually.
+    this.abortedThrough = this.generation;
     this.generation += 1;
     this.capture?.stop();
     this.capture = null;
-    this.inFlight?.abort();
-    this.inFlight = null;
+    for (const controller of this.inFlight) controller.abort();
+    this.inFlight.clear();
   }
 
   dispose(): void {

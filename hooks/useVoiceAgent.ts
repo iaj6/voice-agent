@@ -455,6 +455,11 @@ export function useVoiceAgent() {
     // passes the post-call guard, and is written into this participant's record.
     // Nothing downstream can tell the two apart, so the drain is cut here.
     recognizerRef.current?.abort();
+    // Cleared here, not only in endCall(). When the agent ends a call itself it
+    // sets the state but leaves this pointing at the finished session, so a late
+    // final arriving during `connecting` passed the post-call guard, showed up in
+    // the new participant's transcript, and fired a turn against the old id.
+    sessionIdRef.current = null;
     setError(null);
     setTranscript([]);
     setToolCalls([]);

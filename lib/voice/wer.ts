@@ -15,21 +15,33 @@
 
 /** Words, lowercased, punctuation dropped. Contractions are expanded first. */
 export function tokenise(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[’']/g, "'")
-    // "I've" and "I have" are the same clinical content and differ by a token.
-    // Counting that as an error measures transcription style, not accuracy.
-    .replace(/\bi'?ve\b/g, "i have")
-    .replace(/\bcan'?t\b/g, "cannot")
-    .replace(/\bwon'?t\b/g, "will not")
-    .replace(/\bdon'?t\b/g, "do not")
-    .replace(/\bdidn'?t\b/g, "did not")
-    .replace(/\bit'?s\b/g, "it is")
-    .replace(/\bi'?m\b/g, "i am")
-    .replace(/[^a-z0-9 ]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  return (
+    text
+      .toLowerCase()
+      .replace(/[’']/g, "'")
+      // "I've" and "I have" are the same clinical content and differ by a token.
+      // Counting that as an error measures transcription style, not accuracy.
+      //
+      // Rules rather than a list. A fixed list of seven covered "don't" and not
+      // "haven't", so scoring "I haven't been able to breathe" against a
+      // perfectly correct "I have not been able to breathe" reported 28.6% WER
+      // and two substitutions — the exact style-not-accuracy error the expansion
+      // exists to remove, on a sentence a breathless participant is likely to say.
+      .replace(/\bcan't\b/g, "cannot")
+      .replace(/\bwon't\b/g, "will not")
+      .replace(/\bshan't\b/g, "shall not")
+      .replace(/\b(\w+)n't\b/g, "$1 not")
+      .replace(/\b(\w+)'ve\b/g, "$1 have")
+      .replace(/\b(\w+)'ll\b/g, "$1 will")
+      .replace(/\b(\w+)'re\b/g, "$1 are")
+      .replace(/\bi'm\b/g, "i am")
+      // "'s" is genuinely ambiguous — "it's" is "it is", "the doctor's note" is
+      // possessive. Only the pronoun forms, where it is not.
+      .replace(/\b(it|that|he|she|there|what|who)'s\b/g, "$1 is")
+      .replace(/[^a-z0-9 ]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
 }
 
 export interface WerResult {
