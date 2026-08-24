@@ -154,8 +154,23 @@ export async function POST(request: Request) {
     }
   };
 
+  /**
+   * Ends the stream, and drains the accumulator on the way out.
+   *
+   * The draining belongs here rather than at the call sites. There are four ways
+   * out — the session cap, the upstream close, the flush-grace timer and an
+   * upstream error — and three separate reviews each found a different one of
+   * them closing before it flushed, losing whatever the participant had said so
+   * far. Three fixes in three places invited a fourth omission; doing it once,
+   * where the closing happens, means a new exit path cannot forget.
+   *
+   * Order matters: `send` is a no-op once `closed` is set, so the flush has to
+   * happen before the flag.
+   */
   const finish = () => {
     if (closed) return;
+    const stranded = transcripts.onClose();
+    if (stranded) send({ type: "final", heard: stranded });
     closed = true;
     clearTimeout(cap);
     try {
@@ -173,14 +188,7 @@ export async function POST(request: Request) {
         // Rotating a session we chose to bound, not a failure — the client opens
         // a fresh one. Reported as an error it surfaced to the operator as a red
         // recognition-failure banner in the middle of a call where recognition
-        // was working fine.
-        //
-        // Flushed first, and in this order. `finish()` marks the stream closed,
-        // after which nothing more can be written — so closing the socket and
-        // letting the close listener do the flushing dropped whatever the
-        // participant was part-way through saying at the boundary.
-        const stranded = transcripts.onClose();
-        if (stranded) send({ type: "final", heard: stranded });
+        // was working fine. finish() flushes whatever was mid-sentence.
         send({ type: "closed", reason: "session-cap" });
         closeUpstream();
         finish();
@@ -188,9 +196,30 @@ export async function POST(request: Request) {
       cap.unref?.();
 
       upstream.addEventListener("message", (event) => {
+        let raw: unknown;
+        try {
+          raw = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+
+        // Operational frames, not transcripts. The transcript parser ignores
+        // anything without text, so these vanished — and a session that ends
+        // clean but transcribes nothing reads to the client as success, retries
+        // four times, then drops to the recogniser this sprint replaced, with
+        // nothing anywhere saying why.
+        const kind = (raw as { type?: string } | null)?.type;
+        if (kind === "Error" || kind === "Warning") {
+          const detail = (raw as { description?: string; message?: string }).description
+            ?? (raw as { message?: string }).message
+            ?? kind;
+          send({ type: "error", message: `The transcription service reported: ${detail}` });
+          return;
+        }
+
         let parsed: Parsed;
         try {
-          parsed = transcripts.onMessage(JSON.parse(String(event.data)));
+          parsed = transcripts.onMessage(raw);
         } catch {
           return;
         }
@@ -200,10 +229,8 @@ export async function POST(request: Request) {
       });
 
       upstream.addEventListener("close", () => {
-        // Anything the endpointer never got to finish. A call that drops mid
-        // sentence would otherwise lose the last thing said.
-        const pending = transcripts.onClose();
-        if (pending) send({ type: "final", heard: pending });
+        // Anything the endpointer never got to finish is flushed by finish(). A
+        // call that drops mid sentence would otherwise lose the last thing said.
         send({ type: "closed" });
         finish();
       });
@@ -240,13 +267,9 @@ export async function POST(request: Request) {
         // trailing utterance still gets a final.
         upstream.send(JSON.stringify({ type: "CloseStream" }));
         setTimeout(() => {
-          // Drain before closing, for the same reason the cap path does. This
-          // timer exists precisely for a recogniser that never sends the final —
-          // measured, three settled segments and no final at all — and calling
-          // finish() first made the close listener's flush a silent no-op,
-          // throwing away the last thing the participant said.
-          const stranded = transcripts.onClose();
-          if (stranded) send({ type: "final", heard: stranded });
+          // This timer exists precisely for a recogniser that never sends the
+          // final — measured, three settled segments and no final at all — so
+          // the flush inside finish() is the whole point of it.
           closeUpstream();
           finish();
         }, FLUSH_GRACE_MS).unref?.();

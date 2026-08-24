@@ -120,7 +120,11 @@ export async function startCapture(): Promise<Capture> {
       /* already torn down */
     }
     for (const t of media.getTracks()) t.stop();
-    void audio.close();
+    // Rejects with InvalidStateError when the browser already closed it — an
+    // audio device removed mid-call, an audio service restart. stop() runs on
+    // every exit path, so without this an ordinary teardown raises an
+    // unhandled rejection on the page.
+    void audio.close().catch(() => {});
     closeStream?.();
   }
 
