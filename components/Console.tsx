@@ -376,6 +376,8 @@ export function Console({ protocol }: { protocol: ProtocolInfo }) {
                 voiceFallbacks={agent.voiceFallbacks}
                 voiceName={agent.voiceName}
                 neuralVoice={agent.neuralVoice}
+                captureSettings={agent.captureSettings}
+                lowestConfidence={agent.lowestConfidence}
               />
             )}
           </div>

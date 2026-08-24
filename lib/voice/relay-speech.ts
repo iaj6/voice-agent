@@ -146,6 +146,8 @@ export class RelayRecognizer implements SpeechRecognizer {
     /** The relay cannot be used here, as opposed to this session having ended. */
     let unusable = false;
     let threw: unknown = null;
+    /** A failure the relay itself says to try again after. */
+    let retryable = false;
     /** An error the relay streamed on an otherwise successful response. */
     let relayError: string | null = null;
 
@@ -164,6 +166,12 @@ export class RelayRecognizer implements SpeechRecognizer {
 
       if (!response.ok || !response.body) {
         const detail = await response.text().catch(() => "");
+        // 429 is the one status the relay declares transient — it is our own
+        // concurrency cap, and half-duplex reaches it by opening a session per
+        // turn while closed ones are still draining. Treating it as a verdict on
+        // the browser dropped the whole check-in to the older recogniser, losing
+        // per-word confidence and echo cancellation over a queue.
+        retryable = response.status === 429;
         throw new Error(detail.slice(0, 160) || `relay returned ${response.status}`);
       }
       await this.readEvents(
@@ -207,7 +215,11 @@ export class RelayRecognizer implements SpeechRecognizer {
       // red banners before the fallback was finally offered.
       const failed = threw !== null || relayError !== null;
       unusable =
-        failed && !controller.signal.aborted && !delivered && !this.everDelivered;
+        failed &&
+        !retryable &&
+        !controller.signal.aborted &&
+        !delivered &&
+        !this.everDelivered;
 
       if (failed && !unusable && !controller.signal.aborted && gen === this.generation) {
         const detail =

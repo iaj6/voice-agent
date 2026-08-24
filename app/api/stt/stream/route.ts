@@ -179,6 +179,22 @@ export async function POST(request: Request) {
     if (stranded) send({ type: "final", heard: stranded });
   };
 
+  /**
+   * Reports a failure, after handing over anything the participant had already
+   * said.
+   *
+   * The order is the whole point and it has now been got wrong at two separate
+   * sites. The client clears a reported error as soon as a transcript arrives,
+   * so an error sent before the flush is erased by it — an exhausted quota
+   * mid-utterance then looks like a clean session end, with no banner and the
+   * first-attempt fallback quietly disabled. Every error goes through here so
+   * there is no third site to get it wrong.
+   */
+  const sendError = (message: string) => {
+    drain();
+    send({ type: "error", message });
+  };
+
   const closeUpstream = () => {
     try {
       upstream.close();
@@ -262,10 +278,9 @@ export async function POST(request: Request) {
           // downgrade the whole check-in to the browser recogniser — losing
           // per-word confidence and echo cancellation over a notice. The client
           // ignores `notice`; it is here so a log has it.
-          send({
-            type: kind === "Error" ? "error" : "notice",
-            message: `The transcription service reported: ${detail}`,
-          });
+          const note = `The transcription service reported: ${detail}`;
+          if (kind === "Error") sendError(note);
+          else send({ type: "notice", message: note });
           return;
         }
 
@@ -288,13 +303,7 @@ export async function POST(request: Request) {
       });
 
       upstream.addEventListener("error", () => {
-        // Drained first, so the final precedes the error rather than following
-        // it. The client clears a reported error as soon as a transcript
-        // arrives, so emitting the error first meant the flush erased it: an
-        // exhausted quota mid-utterance looked like a clean session end, with no
-        // banner and the first-attempt fallback quietly disabled.
-        drain();
-        send({ type: "error", message: "The transcription service disconnected." });
+        sendError("The transcription service disconnected.");
         finish();
       });
 

@@ -66,6 +66,11 @@ export function parseMessage(raw: unknown): Parsed {
     confidence: typeof w.confidence === "number" ? w.confidence : null,
   }));
 
+  // A response carrying a transcript but no per-word data disables the
+  // low-confidence read-back entirely, silently — `needsConfirmation` only
+  // flags words whose confidence is a number, so no words means nothing to
+  // flag. The relay declares `reportsConfidence = true`, so this is a broken
+  // promise rather than an absent feature, and it should be visible.
   const scored = words.map((w) => w.confidence).filter((c): c is number => c !== null);
   const heard: Heard = {
     text,
@@ -91,6 +96,11 @@ export function parseMessage(raw: unknown): Parsed {
  */
 export function joinHeard(parts: readonly Heard[]): Heard {
   const words = parts.flatMap((p) => p.words);
+  // A response carrying a transcript but no per-word data disables the
+  // low-confidence read-back entirely, silently — `needsConfirmation` only
+  // flags words whose confidence is a number, so no words means nothing to
+  // flag. The relay declares `reportsConfidence = true`, so this is a broken
+  // promise rather than an absent feature, and it should be visible.
   const scored = words.map((w) => w.confidence).filter((c): c is number => c !== null);
   return {
     text: parts

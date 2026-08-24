@@ -356,11 +356,18 @@ export function useVoiceAgent() {
 
   const handleInterim = useCallback((text: string) => {
     const speaking = synthRef.current?.currentText() ?? "";
+    // Interims are cumulative now — the relay emits settled segments plus the
+    // running hypothesis — so the string grows for as long as someone talks, and
+    // a containment test against it gets easier to trip the longer they go. A
+    // short agent turn ("Okay.") appearing anywhere in a minute of participant
+    // speech would suppress the display and, with barge-in on, swallow the
+    // interruption. Only the tail is a plausible echo of what is playing now.
+    const tail = speaking ? text.slice(-Math.max(speaking.length * 2, 80)) : text;
 
     if (stateRef.current === "speaking") {
       if (!bargeInRef.current) return;
       if (text.trim().split(/\s+/).length < BARGE_IN_MIN_WORDS) return;
-      if (looksLikeEcho(text, speaking)) return;
+      if (looksLikeEcho(tail, speaking)) return;
 
       // Real interruption: stop talking, drop the rest of the turn, and listen.
       synthRef.current?.cancel();
@@ -368,7 +375,7 @@ export function useVoiceAgent() {
       setCallState("listening");
     }
 
-    if (looksLikeEcho(text, speaking)) return;
+    if (looksLikeEcho(tail, speaking)) return;
     setInterim(text);
   }, [setCallState]);
 
@@ -423,6 +430,23 @@ export function useVoiceAgent() {
         if (recognizerRef.current !== relay) return;
         relay.dispose();
         const fallback = new BrowserRecognizer(callbacks);
+        if (!fallback.supported) {
+          // Nothing left to fall back to. Silently installing a recogniser that
+          // cannot start means a whole check-in with a dead microphone and a
+          // console reading "listening".
+          setError(
+            "Speech recognition is unavailable: the relay could not be reached " +
+              "and this browser has no recogniser of its own.",
+          );
+          return;
+        }
+        // Said out loud, because the operator is now on a recogniser without
+        // per-word confidence or acoustic echo cancellation, and the record it
+        // produces is measurably different.
+        setError(
+          "Speech recognition fell back to the browser engine. Per-word " +
+            "confidence and echo cancellation are unavailable for this call.",
+        );
         recognizerRef.current = fallback;
         setCaptureSettings(null);
         // Not gated on "listening". The relay's first failure lands moments

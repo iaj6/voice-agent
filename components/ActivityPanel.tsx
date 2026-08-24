@@ -2,6 +2,7 @@
 
 import type { ToolCallLine } from "@/hooks/useVoiceAgent";
 import type { UsageTotals } from "@/hooks/useVoiceAgent";
+import type { CaptureSettings } from "@/lib/voice/capture";
 
 function preview(value: unknown, max = 320) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 1);
@@ -16,6 +17,8 @@ export function ActivityPanel({
   voiceFallbacks,
   voiceName,
   neuralVoice,
+  captureSettings,
+  lowestConfidence,
 }: {
   toolCalls: ToolCallLine[];
   usage: UsageTotals;
@@ -23,6 +26,8 @@ export function ActivityPanel({
   voiceFallbacks: number;
   voiceName: string;
   neuralVoice: boolean;
+  captureSettings: CaptureSettings | null;
+  lowestConfidence: number | null;
 }) {
   // Prompt tokens are input + cache writes + cache reads. Omitting the writes
   // shrinks the denominator and flatters the figure, which matters here because
@@ -99,6 +104,78 @@ export function ActivityPanel({
           {neuralVoice
             ? "Pinned voice and model, identical for every subject on every device. Fallbacks are sentences the browser had to speak because synthesis was unavailable — the subject heard a different voice for those."
             : "Browser synthesis varies by operating system and browser version, so two subjects will not hear the same instrument."}
+        </p>
+      </section>
+
+      <div className="hairline" />
+
+      <section className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between">
+          <span className="stamp stamp-lit">Microphone</span>
+          <span
+            className="font-mono text-[10px] tabular-nums"
+            style={{
+              color: !captureSettings
+                ? "var(--color-bone-faint)"
+                : captureSettings.echoCancellation
+                  ? "var(--color-bone-faint)"
+                  : "var(--color-rust)",
+            }}
+          >
+            {captureSettings
+              ? `${captureSettings.sampleRate} Hz · AEC ${captureSettings.echoCancellation ? "on" : "OFF"}`
+              : "browser engine"}
+          </span>
+        </div>
+        <p
+          className="text-[10.5px] leading-relaxed"
+          style={{ color: "var(--color-bone-faint)" }}
+        >
+          {captureSettings ? (
+            <>
+              What the browser actually granted, read back from the track rather
+              than assumed from what was asked for. A constraint is a request; if
+              echo cancellation reads OFF, the agent will hear itself and the
+              count below is the only thing catching it.
+              {captureSettings.sampleRate !== 16000
+                ? " The rate differs from the 16 kHz requested and is sent to the recogniser as measured."
+                : null}
+            </>
+          ) : (
+            <>
+              Capture is being handled by the browser&rsquo;s own recogniser, which
+              does not report what it applied and does not carry per-word
+              confidence.
+            </>
+          )}
+        </p>
+      </section>
+
+      <div className="hairline" />
+
+      <section className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between">
+          <span className="stamp stamp-lit">Lowest word confidence</span>
+          <span
+            className="font-mono text-[10px] tabular-nums"
+            style={{
+              color:
+                lowestConfidence !== null && lowestConfidence < 0.6
+                  ? "var(--color-rust)"
+                  : "var(--color-bone-faint)",
+            }}
+          >
+            {lowestConfidence === null ? "—" : lowestConfidence.toFixed(3)}
+          </span>
+        </div>
+        <p
+          className="text-[10.5px] leading-relaxed"
+          style={{ color: "var(--color-bone-faint)" }}
+        >
+          The worst the recogniser felt about any single word this participant
+          said. Below 0.6 a clinical term would be read back before it is
+          recorded — detection only, until backlog 4.3 wires the read-back into
+          the agent&rsquo;s turn.
         </p>
       </section>
 
