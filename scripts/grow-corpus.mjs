@@ -92,11 +92,26 @@ const KINDS = {
 };
 
 const args = process.argv.slice(2);
+
+/** Accepts `--n 6` and `--n=6`, and refuses a flag with nothing after it. */
 const valueOf = (flag, fallback) => {
+  const inline = args.find((a) => a.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
   const i = args.indexOf(flag);
-  return i === -1 ? fallback : args[i + 1];
+  if (i === -1) return fallback;
+  const next = args[i + 1];
+  if (next === undefined || next.startsWith("--")) {
+    console.error(`\n${flag} needs a value.\n`);
+    process.exit(2);
+  }
+  return next;
 };
+
 const perKind = Number(valueOf("--n", "6"));
+if (!Number.isFinite(perKind) || perKind < 1) {
+  console.error("\n--n must be a positive number.\n");
+  process.exit(2);
+}
 const topics = args.includes("--all")
   ? Object.keys(TOPICS)
   : [valueOf("--topic", "")].filter((t) => TOPICS[t]);
@@ -135,13 +150,23 @@ async function generate(topic, kind, n) {
       },
     ],
   });
-  return message.content
+  const lines = message.content
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("")
     .split("\n")
     .map((l) => l.replace(/^\s*[-–—*\d.)\s]+/, "").trim())
     .filter((l) => l.length > 8);
+
+  // A hit token cap truncates mid-sentence, and the `compound` kind asks for
+  // long rambling answers, so the cap is reachable. The last line of a truncated
+  // response is a fragment; staging it would put a half-sentence into the corpus
+  // as though a participant had said it.
+  if (message.stop_reason === "max_tokens") {
+    lines.pop();
+    console.log(`  ${C.dim(`(${topic}/${kind} hit the token cap; dropped the partial line)`)}`);
+  }
+  return lines;
 }
 
 const corpusFile = new URL("../tests/corpus/safety-corpus.json", import.meta.url);
@@ -158,7 +183,14 @@ console.log(`\n${C.bold("growing corpus")} ${C.dim(`${topics.length} topic(s) ×
 
 for (const topic of topics) {
   const kinds = [...SIGNAL_KINDS, ...QUIET_KINDS];
-  const results = await Promise.all(kinds.map((kind) => generate(topic, kind, perKind)));
+  // Settled, not all-or-nothing: with --all this is 70 calls, and one transport
+  // failure used to throw away every batch that had already succeeded.
+  const settled = await Promise.allSettled(
+    kinds.map((kind) => generate(topic, kind, perKind)),
+  );
+  const results = settled.map((r) => (r.status === "fulfilled" ? r.value : []));
+  const lost = settled.filter((r) => r.status === "rejected").length;
+  if (lost > 0) console.log(`  ${C.dim(`(${lost} batch(es) failed for ${topic})`)}`);
 
   let added = 0;
   kinds.forEach((kind, i) => {
@@ -178,9 +210,22 @@ for (const topic of topics) {
   console.log(`  ${C.good("+")} ${topic.padEnd(24)} ${added}`);
 }
 
+// Merged with whatever is already staged rather than overwriting it: running
+// one topic at a time is the natural way to use this, and truncating meant only
+// the last topic survived.
 const out = new URL("../tests/corpus/staged.json", import.meta.url);
-writeFileSync(out, JSON.stringify(staged, null, 2) + "\n");
+let previous = [];
+try {
+  previous = JSON.parse(readFileSync(out, "utf8"));
+} catch {
+  /* nothing staged yet */
+}
+const merged = [...previous];
+for (const entry of staged) {
+  if (!merged.some((e) => normalise(e.text) === normalise(entry.text))) merged.push(entry);
+}
+writeFileSync(out, JSON.stringify(merged, null, 2) + "\n");
 console.log(
-  `\n  ${staged.length} staged in tests/corpus/staged.json` +
+  `\n  ${staged.length} new, ${merged.length} staged in tests/corpus/staged.json` +
     `\n  ${C.dim("`expect` is the generator's intent — read them before merging.")}\n`,
 );

@@ -42,3 +42,4 @@ next-env.d.ts
 voice-samples/
 .speech-cache/
 .spike-logs/
+tests/corpus/staged.json

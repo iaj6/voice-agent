@@ -112,7 +112,7 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
 | **N-01 (P)** | Time to first audio under 2s at p50, under 4s at p95 | ~2.5s p50, unmeasured p95 |
 | **N-02 (P)** | A provider outage degrades audibly, never to silence | Speech falls back; the model does not |
 | **N-03 (P)** | Zero fabricated content reaching the record or the speaker | Guarded three ways; no ongoing measurement |
-| **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 51.4% / 100% specificity, measured once |
+| **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 27.0% / 91.1% specificity on a 473-utterance corpus; trend in `docs/net-history.jsonl` |
 | **N-05 (P)** | Participant speech is not transmitted to a subprocessor without disclosure | Read-back text reaches the speech provider |
 | **N-06** | Concurrency for one site's weekly cadence (~20 calls/week) | Untested |
 
@@ -157,7 +157,7 @@ Ordered by consequence, not likelihood.
 
 | Risk | Consequence | Current mitigation | Gap |
 |---|---|---|---|
-| Missed safety signal | Participant harm; delayed reporting | Model + net + screen + human review | Net at 51.4%; four topics unscreened |
+| Missed safety signal | Participant harm; delayed reporting | Model + net + screen + human review | Net at 27.0% and **0 of 81 colloquial**; screen covers 9 topics, self-harm by open probe only |
 | Escalation not delivered | Participant harm; record claims otherwise | None — recorded only | **F-13** |
 | Fabricated content in the record | Data falsification | Stop sequences, per-item tools, hold-back | No ongoing measurement |
 | Lost record mid-call | Reportable event disappears | None | **F-18** |

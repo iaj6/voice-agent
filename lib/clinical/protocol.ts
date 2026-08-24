@@ -10,7 +10,7 @@
  * One item of the directed safety screen.
  *
  * The screen exists because listening for danger in open-ended speech is the hard
- * version of this problem and the keyword net measures 48.5% sensitive on it —
+ * version of this problem and the keyword net measures 27.0% sensitive on it —
  * blind to every colloquial phrasing in the corpus. Asking directly converts
  * open-domain detection into a yes/no, which is the reliable version. A positive
  * answer escalates deterministically, without the model deciding anything.
@@ -110,8 +110,19 @@ export const PROTOCOL: ProtocolDefinition = {
        */
       id: "stroke_signs",
       label: "Sudden neurological symptoms",
+      // Asked as a change from their own baseline, which is how a clinician asks
+      // it and is not optional here. Subject 002-0027's baseline is "Migraine
+      // with aura" — unilateral numbness and a severe headache are what that
+      // *is*. The first wording would have paged an emergency and ended the
+      // call on a truthful answer about a known condition, every week, which is
+      // the alert fatigue this system's own measurement page warns about.
+      //
+      // The deterministic escalation path cannot see baselineConditions at all —
+      // they reach the model as prose and nothing else. That is the general
+      // problem behind this specific one, and wording is a patch on it rather
+      // than a fix; see the note in BACKLOG under Sprint 5.
       prompt:
-        "Have you had any sudden weakness or numbness on one side, trouble speaking, or a sudden very bad headache?",
+        "Have you had any sudden weakness, numbness on one side, or trouble speaking that is new or different from your usual? Or the worst headache you have ever had?",
       redFlag: true,
       urgencyIfPositive: "emergency",
     },

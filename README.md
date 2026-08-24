@@ -157,8 +157,8 @@ is a wish.
 
 ### Asking beats listening
 
-The keyword net measures **48.5% sensitive** on the annotated corpus and catches **0 of 31**
-colloquial phrasings — "my chest is killing me", "I get winded going to the bathroom", "I
+The keyword net measures **27.0% sensitive** on the annotated corpus and catches
+**0 of 81** colloquial phrasings — "my chest is killing me", "I get winded going to the bathroom", "I
 just don't see the point in any of this anymore" all pass it silently. `npm run measure-net`
 prints the confusion matrix and the per-kind breakdown.
 

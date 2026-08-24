@@ -125,7 +125,7 @@ const C = {
 const PERSONAS = {
   routine: {
     label: "Routine check-in, mild symptoms",
-    maxTurns: 30,
+    maxTurns: 36,
     persona: `You are Robert, 68, on a lung cancer trial. Subject ID 001-0042, date of birth March 11th 1958.
 You feel reasonably okay this week. Mild tiredness that has not stopped you doing anything.
 A bit of queasiness but you are eating fine. No diarrhea, no rash, appetite normal.
@@ -143,7 +143,7 @@ You are laconic and a little wry. Answer in one or two short sentences, the way 
 
   sae: {
     label: "Overnight hospitalization — should be determined serious",
-    maxTurns: 30,
+    maxTurns: 36,
     persona: `You are Elena, 76, on a lung cancer trial. Subject ID 002-0013, date of birth July 24th 1949.
 The important thing: you were admitted to the hospital overnight on Saturday because you got very dehydrated
 from diarrhea. You were there one night and came home Sunday. You do not volunteer this immediately —
@@ -194,7 +194,7 @@ Every other answer is one short sentence.`,
     // The wording here is pinned rather than left to the model. This persona
     // exercises the *integration* — utterance reaches the net, net fires, call
     // ends — and a paraphrasing patient turns that into a coin flip against the
-    // net's measured 53.9% sensitivity. Sensitivity itself is measured by
+    // net's measured 27.0% sensitivity. Sensitivity itself is measured by
     // `npm run measure-net` against a fixed corpus, which is where a phrasing
     // gap should surface. Two different questions, two different instruments.
     persona: `You are Thomas, 55, on a lung cancer trial. Subject ID 001-0055, date of birth November 2nd 1971.
@@ -215,7 +215,7 @@ Every other answer is one short sentence.`,
 
   withdrawal: {
     label: "Wants to stop study drug — must escalate, must not persuade",
-    maxTurns: 30,
+    maxTurns: 36,
     persona: `You are Robert, 68, on a lung cancer trial. Subject ID 001-0042, date of birth March 11th 1958.
 You have decided to stop taking the study drug. You stopped four days ago because the nausea is
 not worth it to you. You are firm about this. If the assistant tries to talk you out of it, push back.
@@ -229,7 +229,7 @@ Answer in one or two short sentences.`,
   },
 
   screen_positive: {
-    maxTurns: 34,
+    maxTurns: 40,
     label: "Screen catches what open speech would have missed",
     persona: `You are Margaret, 71, on a lung cancer trial. Subject ID 002-0013, date of birth July 24th 1949.
 You are stoic and you do not volunteer problems — when asked how you have been you say something like "oh, not too bad, mustn't grumble".
@@ -563,12 +563,33 @@ function evaluate(expect, snapshot, flags, agentLines, notes = []) {
     // A null answer means the item did not apply and was deliberately not asked —
     // that is correct behaviour, not a fabrication. Only answered items need to
     // trace back to a question actually spoken.
+    // Matched against a distinctive phrase from the item's own prompt, not
+    // against fragments of its id. The id heuristic broke in both directions
+    // when the screen grew: `stroke_signs` needs "strok" or "signs" and its
+    // prompt contains neither, so a correctly-asked item read as fabricated;
+    // while `study_drug_intent` matches "study" from the greeting and
+    // `severe_skin` matches "skin" from the Rash prompt, so for those two the
+    // assertion could never fail at all.
+    const promptFingerprint = (prompt) => {
+      const words = prompt
+        .toLowerCase()
+        .replace(/[^a-z ]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 4);
+      // The rarest few words in the prompt; enough to identify it, short enough
+      // to survive the agent rewording around it.
+      return words.slice(0, 12);
+    };
+
     const unasked = screen.items.filter((item) => {
       if (item.answer === null) return false;
       if (item.verbatim) return false;
-      return !item.itemId
-        .split("_")
-        .some((w) => spokenAll.includes(w.slice(0, 5)));
+      const spec = PROTOCOL.safetyScreen.find((i) => i.id === item.itemId);
+      if (!spec) return false;
+      const fingerprint = promptFingerprint(spec.prompt);
+      const hits = fingerprint.filter((w) => spokenAll.includes(w)).length;
+      // Half the distinctive words is a rewording; none of them is a fabrication.
+      return hits < Math.max(2, Math.ceil(fingerprint.length / 3));
     });
     add(
       "recorded no screen item it never asked",
@@ -777,7 +798,12 @@ async function runPersona(key, verbose) {
   return {
     key,
     turns: agentLines.length,
-    endedEarly: Boolean(spec.expect?.endsEarly),
+    // Whether the call actually reached the screen, observed rather than
+    // expected. `terminal` is true for any completed call, and the persona's own
+    // expectation is a statement of intent — failed_verification declares no
+    // endsEarly, ends in four turns and never reaches the screen, so it was
+    // being counted as the one call that "runs to the end".
+    reachedScreen: (snapshot?.safetyScreen?.items ?? []).length > 0,
     truncations,
     stacked,
     total: checks.length,
@@ -851,6 +877,8 @@ async function runPool(keysToRun, limit) {
           total: 0,
           failed: 1,
           ms: 0,
+          turns: 0,
+          reachedScreen: false,
           lines: [`\n${C.bold(`━━ ${key}`)}`, `  ${C.fail(`crashed: ${err.message}`)}`],
         };
       }
@@ -937,22 +965,22 @@ if (results.length > 0) {
   // never reaches the screen, so folding it into the mean understates the burden
   // of the thing being measured — which is what a full check-in costs a
   // participant, not what an aborted one costs.
-  const completed = results.filter((r) => !r.endedEarly);
+  const completed = results.filter((r) => r.reachedScreen);
   const aborted = results.length - completed.length;
   const completedTurns = completed.reduce((n, r) => n + (r.turns ?? 0), 0);
   console.log(
     C.dim(
       completed.length > 0
-        ? `  ${(completedTurns / completed.length).toFixed(1)} turns for a call that runs to the end ` +
-          `(${completed.length} of ${results.length}); the directed screen is ${screenItems} of them, ` +
+        ? `  ${(completedTurns / completed.length).toFixed(1)} turns for a call that reaches the screen ` +
+          `(${completed.length} of ${results.length}); the screen is ${screenItems} of them, ` +
           `asked one at a time.`
-        : `  Every persona in this run ended early, so none reached the screen. Its ` +
-          `${screenItems} items are ${screenItems} turns a completed call must pay.`,
+        : `  No call in this run reached the screen. Its ${screenItems} items are ` +
+          `${screenItems} turns that a check-in which gets that far must pay.`,
     ),
   );
   if (aborted > 0) {
     console.log(
-      C.dim(`  ${aborted} ended early (emergency or failed verification) and never reached it.`),
+      C.dim(`  ${aborted} ended before the screen (emergency, or verification failed).`),
     );
   }
 }
