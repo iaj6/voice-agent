@@ -325,7 +325,7 @@ export function useVoiceAgent() {
       //
       // A record that displays an utterance it did not capture is worse than one
       // that admits it, so say so and hand the words to the coordinator.
-      if (!sessionIdRef.current) {
+      if (!sessionIdRef.current || stateRef.current === "ended") {
         setError(
           `Heard after the call ended, so it was not recorded: "${text}". ` +
             `Add it to the record by hand if it matters.`,
@@ -451,6 +451,10 @@ export function useVoiceAgent() {
     });
     setEchoSuppressed(0);
     setVoiceFallbacks(0);
+    // A running minimum, so without this the second check-in in a tab reports
+    // the first participant's worst word — which is the number 4.3's read-back
+    // threshold gets judged against.
+    setLowestConfidence(null);
     pendingRef.current = [];
     setCallState("connecting");
 

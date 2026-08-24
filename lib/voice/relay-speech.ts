@@ -97,12 +97,23 @@ export class RelayRecognizer implements SpeechRecognizer {
     } catch (err) {
       if (gen === this.generation) {
         this.wantRunning = false;
-        // A refused microphone is the single most likely failure here and it is
-        // not an error the participant can debug from a stack trace.
-        this.callbacks.onError(
-          `The microphone is unavailable: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        this.callbacks.onEnd();
+        const name = err instanceof Error ? err.name : "";
+        // A refused or absent microphone is terminal — the browser recogniser
+        // would be refused too, and it is not an error the participant can debug
+        // from a stack trace. Everything else capture can fail on is specific to
+        // owning the audio path: an undeployed worklet, a CSP that blocks
+        // addModule, a browser that will not build a 16 kHz context. The older
+        // recogniser handles all of those, so hand back rather than ending the
+        // call with no microphone.
+        if (name === "NotAllowedError" || name === "NotFoundError") {
+          this.callbacks.onError(
+            `The microphone is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          this.callbacks.onEnd();
+        } else {
+          this.callbacks.onEnd();
+          this.onUnavailable?.();
+        }
       }
       return;
     }
@@ -233,8 +244,7 @@ export class RelayRecognizer implements SpeechRecognizer {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      // A superseded or disposed session must not still be talking to the agent.
-      if (gen !== this.generation) return;
+      if (this.disposed) return;
       buffer += decoder.decode(value, { stream: true });
 
       const frames = buffer.split("\n\n");
@@ -250,9 +260,17 @@ export class RelayRecognizer implements SpeechRecognizer {
           continue;
         }
 
+        // A session superseded by a newer one is still draining, and the reason
+        // stop() does not abort is to wait for exactly what it is about to send.
+        // Guarding the whole loop on the generation threw that away on every one
+        // of the ~22 turns in a half-duplex call — the participant starts
+        // answering as the agent stops speaking, and the sentence went nowhere.
+        const draining = gen !== this.generation;
+
         if (event.type === "interim" && event.heard) {
           onDelivered();
-          this.callbacks.onInterim(event.heard.text);
+          // Its guesses, though, would fight the live session for the display.
+          if (!draining) this.callbacks.onInterim(event.heard.text);
         } else if (event.type === "final" && event.heard) {
           onDelivered();
           this.callbacks.onFinal(event.heard);

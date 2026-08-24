@@ -1,3 +1,4 @@
+import { Agent } from "undici";
 import {
   createTranscriptStream,
   type Parsed,
@@ -51,6 +52,24 @@ const deepgramParams = (sampleRate: number) => ({
  * error — so capture reads its real rate back and sends it, and this is where it
  * is believed. Bounded because it arrives from the client.
  */
+/**
+ * The same h2 problem `lib/agent/runner.ts` already pins its own agent for, on a
+ * socket that never got the treatment.
+ *
+ * Node negotiates HTTP/2 for the upgrade, and when the recogniser *refuses* the
+ * handshake — rotated key, revoked scope, exhausted quota — undici emits an
+ * unhandled error on the internal h2 stream instead of on the WebSocket. Neither
+ * the error nor the close listener below ever fires, and the uncaught
+ * `SocketError: other side closed` takes the server process down. Reproduced
+ * with a bogus token; with `allowH2: false` the same token fires the error
+ * listener, closes 1006, and the process lives.
+ *
+ * Worth being precise about what that cost: a refused handshake is exactly the
+ * state the fallback to the browser recogniser was built for, and crashing
+ * instead of reporting made that fallback unreachable.
+ */
+const socketAgent = new Agent({ allowH2: false, connections: 32 });
+
 const RATE_RANGE = { min: 8_000, max: 96_000 };
 /** Matches `TARGET_SAMPLE_RATE` in capture.ts; not imported, because that module
  *  reaches for `navigator` and belongs in the browser bundle. */
@@ -98,7 +117,10 @@ export async function POST(request: Request) {
 
   const upstream = new WebSocket(
     `wss://api.deepgram.com/v1/listen?${new URLSearchParams(deepgramParams(requestedRate(request.url)))}`,
-    { headers: { Authorization: `Token ${key}` } } as unknown as string[],
+    {
+      headers: { Authorization: `Token ${key}` },
+      dispatcher: socketAgent,
+    } as unknown as string[],
   );
 
   const encoder = new TextEncoder();

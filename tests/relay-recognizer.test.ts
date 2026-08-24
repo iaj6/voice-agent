@@ -15,8 +15,12 @@ let openSessions = 0;
 let endSession: (() => void) | null = null;
 /** Pushes an SSE event into the open session, standing in for the recogniser. */
 let deliver: ((type: string, text: string) => void) | null = null;
+/** Every session opened, so a test can speak to one that is still draining. */
+const sessions: { deliver: (type: string, text: string) => void; end: () => void }[] = [];
 /** Makes the next fetch fail, standing in for a dropped session. */
 let failNext = false;
+/** Makes the next startCapture throw, standing in for a broken audio path. */
+let failCapture: Error | null = null;
 
 mock.module("../lib/voice/capture.ts", {
   // `exports` replaced `namedExports` in the runtime API; the shipped type
@@ -25,6 +29,11 @@ mock.module("../lib/voice/capture.ts", {
   exports: {
     TARGET_SAMPLE_RATE: 16_000,
     startCapture: async () => {
+      if (failCapture) {
+        const err = failCapture;
+        failCapture = null;
+        throw err;
+      }
       const state = { stopped: false };
       captures.push(state);
       return {
@@ -49,6 +58,9 @@ const { RelayRecognizer } = await import("../lib/voice/relay-speech.ts");
 /** A relay that stays open until the test lets it end. */
 function stubFetch(status = 200) {
   failNext = false;
+  failCapture = null;
+  openSessions = 0;
+  sessions.length = 0;
   globalThis.fetch = (async () => {
     if (failNext) {
       failNext = false;
@@ -76,6 +88,7 @@ function stubFetch(status = 200) {
               /* already gone */
             }
           };
+          sessions.push({ deliver: deliver!, end: endSession });
         },
       }),
       { headers: { "Content-Type": "text/event-stream" } },
@@ -91,6 +104,62 @@ const callbacks = () => ({
   onStart: () => {},
   onEnd: () => {},
   onError: () => {},
+});
+
+test("the final a draining session flushes still reaches the agent", async () => {
+  // stop() deliberately does not abort, so the relay can flush the sentence the
+  // participant was part-way through when the agent started speaking. Discarding
+  // that once a newer session exists loses it on every one of the ~22 turns in a
+  // half-duplex call, silently.
+  captures.length = 0;
+  stubFetch();
+  const finals: string[] = [];
+  const recognizer = new RelayRecognizer({
+    ...callbacks(),
+    onFinal: (heard) => finals.push(heard.text),
+  });
+
+  recognizer.start();
+  await settle();
+  recognizer.stop();
+  recognizer.start();
+  await settle();
+  assert.equal(sessions.length, 2, "a newer session is open");
+
+  // The old one flushes what it owed.
+  sessions[0].deliver("final", "I coughed up blood this morning");
+  sessions[0].end();
+  await settle();
+
+  assert.deepEqual(finals, ["I coughed up blood this morning"]);
+  recognizer.dispose();
+});
+
+test("a capture failure that is not a refused microphone hands back", async () => {
+  // An undeployed worklet or a blocking CSP is specific to owning the audio
+  // path. The older recogniser works fine in all of them, so ending the call
+  // with no microphone is the wrong answer.
+  captures.length = 0;
+  stubFetch();
+  let handedBack = 0;
+  let errored = 0;
+  const recognizer = new RelayRecognizer(
+    { ...callbacks(), onError: () => { errored += 1; } },
+    { onUnavailable: () => { handedBack += 1; } },
+  );
+
+  failCapture = new DOMException("worklet missing", "AbortError");
+  recognizer.start();
+  await settle();
+  assert.equal(handedBack, 1, "the caller can install the fallback");
+  assert.equal(errored, 0, "and the participant is not told the mic is broken");
+
+  failCapture = new DOMException("denied", "NotAllowedError");
+  recognizer.start();
+  await settle();
+  assert.equal(handedBack, 1, "a refused microphone is terminal, not a swap");
+  assert.equal(errored, 1);
+  recognizer.dispose();
 });
 
 test("the microphone reopens even though the last session is still draining", async () => {
