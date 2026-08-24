@@ -16,6 +16,8 @@ import {
 import { ElevenLabsSynthesizer } from "@/lib/voice/elevenlabs-speech";
 import { VOICE_NAME } from "@/lib/voice/tts-config";
 import type { Heard, SpeechRecognizer, SpeechSynthesizer } from "@/lib/voice/types";
+import { RelayRecognizer } from "@/lib/voice/relay-speech";
+import type { CaptureSettings } from "@/lib/voice/capture";
 import type { SafetyNetHit } from "@/lib/clinical/safety";
 import type { SessionSnapshot } from "@/lib/store/session";
 import { isEchoOfRecentSpeech, looksLikeEcho } from "@/lib/voice/echo";
@@ -73,6 +75,14 @@ export function useVoiceAgent() {
   const [error, setError] = useState<string | null>(null);
   const [echoSuppressed, setEchoSuppressed] = useState(0);
   const [lowestConfidence, setLowestConfidence] = useState<number | null>(null);
+  /**
+   * What the microphone actually gave us.
+   *
+   * Asking for echo cancellation is not getting it, and the difference decides
+   * whether the text-level echo filter is a belt-and-braces measure or the only
+   * thing standing between the agent and its own voice.
+   */
+  const [captureSettings, setCaptureSettings] = useState<CaptureSettings | null>(null);
   const [voiceFallbacks, setVoiceFallbacks] = useState(0);
   const [neuralVoice, setNeuralVoice] = useState(true);
   const [usage, setUsage] = useState<UsageTotals>({
@@ -371,13 +381,23 @@ export function useVoiceAgent() {
         })
       : new BrowserSynthesizer(synthCallbacks);
 
-    const recognizer = new BrowserRecognizer({
+    // The relay when the browser can stream a request body, the Web Speech API
+    // when it cannot. The relay is the one with per-word confidence and real
+    // echo cancellation; the fallback exists so a non-Chromium browser degrades
+    // to what the project had before rather than to nothing.
+    const callbacks = {
       onInterim: handleInterim,
       onFinal: handleFinal,
       onStart: () => {},
       onEnd: () => {},
-      onError: (message) => setError(message),
+      onError: (message: string) => setError(message),
+    };
+    const relay = new RelayRecognizer(callbacks, {
+      onSettings: (applied) => setCaptureSettings(applied),
     });
+    const recognizer: SpeechRecognizer = relay.supported
+      ? relay
+      : new BrowserRecognizer(callbacks);
 
     synthRef.current = synth;
     recognizerRef.current = recognizer;
@@ -465,6 +485,7 @@ export function useVoiceAgent() {
     usage,
     echoSuppressed,
     lowestConfidence,
+    captureSettings,
     voiceFallbacks,
     neuralVoice,
     setNeuralVoice,

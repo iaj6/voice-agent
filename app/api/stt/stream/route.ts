@@ -1,0 +1,181 @@
+import {
+  createTranscriptStream,
+  type Parsed,
+} from "../../../../lib/voice/deepgram-protocol.ts";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/**
+ * Relays microphone audio to the recogniser, so the credential never leaves the
+ * server.
+ *
+ * The browser cannot talk to Deepgram directly without a short-lived token, and
+ * this account's key cannot mint one. The alternative — a long-lived key in a
+ * NEXT_PUBLIC_ variable — would hand a paid transcription account to anyone who
+ * opens devtools. So audio goes to us and we go to them, which is also the
+ * answer a clinical system wants regardless: the audio path stays inside
+ * infrastructure that can be audited, logged and covered by an agreement,
+ * instead of a browser opening a socket to a third party nobody has a record of.
+ *
+ * **Request streaming in, SSE out**, rather than a WebSocket. A WebSocket here
+ * would mean a new dependency and a deployment shape this project has not tried;
+ * a streamed POST body with an event-stream response is the same duplex
+ * behaviour over plumbing that already works on the Node runtime. It needs
+ * `duplex: "half"` on the browser side, which is Chromium-only — the same
+ * constraint the Web Speech API already imposed, so nothing is lost.
+ */
+const DEEPGRAM_PARAMS = {
+  model: process.env.DEEPGRAM_MODEL ?? "nova-3-medical",
+  encoding: "linear16",
+  sample_rate: "16000",
+  channels: "1",
+  smart_format: "true",
+  interim_results: "true",
+  // Long enough that a pause for breath is not a turn, short enough that the
+  // agent does not sit in silence. Elderly participants pause mid-sentence.
+  endpointing: "500",
+  language: "en",
+};
+
+export async function POST(request: Request) {
+  const key = process.env.DEEPGRAM_API_KEY;
+  if (!key) {
+    return Response.json(
+      { error: "DEEPGRAM_API_KEY is not set; speech recognition is unavailable." },
+      { status: 503 },
+    );
+  }
+  if (!request.body) {
+    return Response.json({ error: "Expected a streamed audio body." }, { status: 400 });
+  }
+
+  const upstream = new WebSocket(
+    `wss://api.deepgram.com/v1/listen?${new URLSearchParams(DEEPGRAM_PARAMS)}`,
+    { headers: { Authorization: `Token ${key}` } } as unknown as string[],
+  );
+
+  const encoder = new TextEncoder();
+  const transcripts = createTranscriptStream();
+
+  // Bounds on how long one relay may live. Deepgram bills by connected time, and
+  // a client that sends two bytes of nonsense and stops used to hold a socket
+  // open until the far end lost patience — found by POSTing `{}` at it and
+  // watching the request hang. A check-in is minutes; an hour is generous.
+  const MAX_SESSION_MS = 60 * 60 * 1000;
+  // After the audio ends we owe the recogniser a moment to flush a final. If it
+  // has not closed by then it is not going to.
+  const FLUSH_GRACE_MS = 5_000;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (event: unknown) => {
+        if (closed) return;
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      };
+      const finish = () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(cap);
+        try {
+          controller.close();
+        } catch {
+          /* already closed by the client going away */
+        }
+      };
+
+      const cap = setTimeout(() => {
+        send({ type: "error", message: "The recognition session exceeded its limit." });
+        try {
+          upstream.close();
+        } catch {
+          /* already gone */
+        }
+        finish();
+      }, MAX_SESSION_MS);
+      cap.unref?.();
+
+      upstream.addEventListener("message", (event) => {
+        let parsed: Parsed;
+        try {
+          parsed = transcripts.onMessage(JSON.parse(String(event.data)));
+        } catch {
+          return;
+        }
+        if (parsed.kind !== "ignore" && parsed.heard) {
+          send({ type: parsed.kind, heard: parsed.heard });
+        }
+      });
+
+      upstream.addEventListener("close", () => {
+        // Anything the endpointer never got to finish. A call that drops mid
+        // sentence would otherwise lose the last thing said.
+        const pending = transcripts.onClose();
+        if (pending) send({ type: "final", heard: pending });
+        send({ type: "closed" });
+        finish();
+      });
+
+      upstream.addEventListener("error", () => {
+        send({ type: "error", message: "The transcription service disconnected." });
+        finish();
+      });
+
+      // Wait for the socket before forwarding, or the first frames are dropped
+      // silently — which sounds exactly like the microphone not working.
+      await new Promise<void>((resolve) => {
+        if (upstream.readyState === WebSocket.OPEN) return resolve();
+        upstream.addEventListener("open", () => resolve(), { once: true });
+        upstream.addEventListener("error", () => resolve(), { once: true });
+      });
+
+      const reader = request.body!.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value?.byteLength && upstream.readyState === WebSocket.OPEN) {
+            upstream.send(value);
+          }
+        }
+      } catch {
+        /* the client hung up; fall through and close cleanly */
+      }
+
+      if (upstream.readyState === WebSocket.OPEN) {
+        // Asks the recogniser to flush rather than dropping the connection, so a
+        // trailing utterance still gets a final.
+        upstream.send(JSON.stringify({ type: "CloseStream" }));
+        setTimeout(() => {
+          if (upstream.readyState === WebSocket.OPEN) {
+            try {
+              upstream.close();
+            } catch {
+              /* already gone */
+            }
+          }
+          finish();
+        }, FLUSH_GRACE_MS).unref?.();
+      } else {
+        finish();
+      }
+    },
+
+    cancel() {
+      try {
+        upstream.close();
+      } catch {
+        /* nothing to do */
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+    },
+  });
+}
