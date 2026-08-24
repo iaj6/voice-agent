@@ -394,15 +394,23 @@ export function useVoiceAgent() {
     };
     const relay = new RelayRecognizer(callbacks, {
       onSettings: (applied) => setCaptureSettings(applied),
+      // The relay is up and has no transcription credential. That is a
+      // deployment state rather than a browser one, so it cannot be detected
+      // before the first attempt — but it degrades to the same place.
+      onUnavailable: () => {
+        if (recognizerRef.current !== relay) return;
+        relay.dispose();
+        const fallback = new BrowserRecognizer(callbacks);
+        recognizerRef.current = fallback;
+        setCaptureSettings(null);
+        if (stateRef.current === "listening") fallback.start();
+      },
     });
-    const recognizer: SpeechRecognizer = relay.supported
-      ? relay
-      : new BrowserRecognizer(callbacks);
+    recognizerRef.current = relay.supported ? relay : new BrowserRecognizer(callbacks);
 
     synthRef.current = synth;
-    recognizerRef.current = recognizer;
     return () => {
-      recognizer.dispose();
+      recognizerRef.current?.dispose();
       synth.dispose();
       recognizerRef.current = null;
       synthRef.current = null;

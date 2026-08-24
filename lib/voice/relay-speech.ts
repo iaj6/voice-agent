@@ -13,46 +13,102 @@
 import { startCapture, type Capture, type CaptureSettings } from "./capture.ts";
 import type { Heard, RecognizerCallbacks, SpeechRecognizer } from "./types.ts";
 
+/**
+ * Whether this browser can stream a request body.
+ *
+ * The relay's hard requirement, and the one worth testing for. Checking
+ * `getUserMedia` and `AudioWorkletNode` instead tests the wrong thing: Safari
+ * has both, so it would report supported, skip the fallback, prompt for the
+ * microphone, and only then fail on the fetch. The participant would have
+ * granted a permission for nothing.
+ *
+ * Reading `duplex` is the detection: a browser that supports request streams
+ * consults the getter and declines to set a Content-Type for the stream.
+ */
+function supportsRequestStreams(): boolean {
+  if (typeof Request === "undefined" || typeof ReadableStream === "undefined") return false;
+  try {
+    let consulted = false;
+    const typed = new Request("https://example.invalid", {
+      method: "POST",
+      body: new ReadableStream(),
+      get duplex() {
+        consulted = true;
+        return "half";
+      },
+    } as RequestInit).headers.has("Content-Type");
+    return consulted && !typed;
+  } catch {
+    return false;
+  }
+}
+
+/** How long to wait before rebuilding a session that ended on its own. */
+const RECONNECT_DELAY_MS = 250;
+/** Consecutive failures that produced nothing before we stop trying. */
+const MAX_RECONNECTS = 3;
+
 export class RelayRecognizer implements SpeechRecognizer {
   readonly supported: boolean;
   readonly reportsConfidence = true;
 
   private readonly callbacks: RecognizerCallbacks;
   private readonly onSettings?: (settings: CaptureSettings) => void;
+  private readonly onUnavailable?: () => void;
   private capture: Capture | null = null;
   private inFlight: AbortController | null = null;
-  private running = false;
+  /** Whether the caller wants a live microphone right now. */
+  private wantRunning = false;
+  /** Bumped per session, so a superseded run cannot clobber a live one. */
+  private generation = 0;
+  private failures = 0;
   private disposed = false;
 
   constructor(
     callbacks: RecognizerCallbacks,
-    options: { onSettings?: (settings: CaptureSettings) => void } = {},
+    options: {
+      onSettings?: (settings: CaptureSettings) => void;
+      onUnavailable?: () => void;
+    } = {},
   ) {
     this.callbacks = callbacks;
     this.onSettings = options.onSettings;
+    this.onUnavailable = options.onUnavailable;
     this.supported =
       typeof navigator !== "undefined" &&
       typeof navigator.mediaDevices?.getUserMedia === "function" &&
-      typeof AudioWorkletNode !== "undefined";
+      typeof AudioWorkletNode !== "undefined" &&
+      supportsRequestStreams();
   }
 
   start(): void {
-    if (this.running || this.disposed) return;
-    this.running = true;
-    void this.run();
+    if (this.wantRunning || this.disposed) return;
+    this.wantRunning = true;
+    this.failures = 0;
+    void this.run(++this.generation);
   }
 
-  private async run(): Promise<void> {
+  private async run(gen: number): Promise<void> {
     let capture: Capture;
     try {
       capture = await startCapture();
     } catch (err) {
-      this.running = false;
-      // A refused microphone is the single most likely failure here and it is
-      // not an error the participant can debug from a stack trace.
-      this.callbacks.onError(
-        `The microphone is unavailable: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      if (gen === this.generation) {
+        this.wantRunning = false;
+        // A refused microphone is the single most likely failure here and it is
+        // not an error the participant can debug from a stack trace.
+        this.callbacks.onError(
+          `The microphone is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        this.callbacks.onEnd();
+      }
+      return;
+    }
+
+    // The permission prompt can sit open for a while. Whatever the caller
+    // decided in the meantime wins.
+    if (gen !== this.generation || !this.wantRunning) {
+      capture.stop();
       return;
     }
 
@@ -63,12 +119,14 @@ export class RelayRecognizer implements SpeechRecognizer {
     const controller = new AbortController();
     this.inFlight = controller;
 
+    let delivered = false;
+    let unavailable = false;
+
     try {
       const response = await fetch("/api/stt/stream", {
         method: "POST",
         body: capture.frames,
-        // Chromium-only, and the same constraint the Web Speech API already
-        // imposed, so nothing is lost by requiring it.
+        // Chromium-only, which `supported` above tests for directly.
         duplex: "half",
         signal: controller.signal,
         headers: { "Content-Type": "application/octet-stream" },
@@ -76,22 +134,78 @@ export class RelayRecognizer implements SpeechRecognizer {
 
       if (!response.ok || !response.body) {
         const detail = await response.text().catch(() => "");
+        // Not a browser difference but a deployment one: the relay is running
+        // and has no transcription credential. Retrying cannot fix that, and a
+        // participant with no microphone at all is worse than one on the older
+        // recogniser, so hand the decision back to the caller.
+        unavailable = response.status === 503;
         throw new Error(detail.slice(0, 160) || `relay returned ${response.status}`);
       }
-      await this.readEvents(response.body);
+      await this.readEvents(response.body, () => {
+        delivered = true;
+        this.failures = 0;
+      });
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && gen === this.generation && !unavailable) {
         this.callbacks.onError(
           `Speech recognition stopped: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     } finally {
-      this.running = false;
-      this.callbacks.onEnd();
+      // This run's microphone stops with this run, on every path out. A relay
+      // that ended early — no credential, an upstream error, the session cap —
+      // otherwise left the recording indicator on and the worklet pushing into a
+      // stream nobody was reading.
+      capture.stop();
+
+      if (gen === this.generation) {
+        this.capture = null;
+        this.inFlight = null;
+
+        if (unavailable) {
+          this.wantRunning = false;
+          this.callbacks.onEnd();
+          this.onUnavailable?.();
+        } else if (this.wantRunning && !this.disposed) {
+          this.resume(gen, delivered);
+        } else {
+          this.callbacks.onEnd();
+        }
+      }
     }
   }
 
-  private async readEvents(body: ReadableStream<Uint8Array>): Promise<void> {
+  /**
+   * Rebuilds a session that ended while we still wanted to be listening.
+   *
+   * The relay closes on its own for ordinary reasons — it caps its own session
+   * so the platform cannot kill it mid-stream, and a call with barge-in on runs
+   * longer than that cap. Without this the microphone simply stopped working
+   * partway through a check-in, silently, with the console still saying
+   * "listening".
+   *
+   * Bounded, because the other reason a session ends immediately is that
+   * something is broken, and retrying that in a tight loop opens a socket per
+   * attempt against a metered account.
+   */
+  private resume(gen: number, delivered: boolean): void {
+    this.failures = delivered ? 0 : this.failures + 1;
+    if (this.failures > MAX_RECONNECTS) {
+      this.wantRunning = false;
+      this.callbacks.onError("Speech recognition could not be re-established.");
+      this.callbacks.onEnd();
+      return;
+    }
+    setTimeout(() => {
+      if (this.disposed || !this.wantRunning || gen !== this.generation) return;
+      void this.run(++this.generation);
+    }, RECONNECT_DELAY_MS);
+  }
+
+  private async readEvents(
+    body: ReadableStream<Uint8Array>,
+    onDelivered: () => void,
+  ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -115,8 +229,10 @@ export class RelayRecognizer implements SpeechRecognizer {
         }
 
         if (event.type === "interim" && event.heard) {
+          onDelivered();
           this.callbacks.onInterim(event.heard.text);
         } else if (event.type === "final" && event.heard) {
+          onDelivered();
           this.callbacks.onFinal(event.heard);
         } else if (event.type === "error") {
           this.callbacks.onError(event.message ?? "Speech recognition failed.");
@@ -128,16 +244,25 @@ export class RelayRecognizer implements SpeechRecognizer {
   stop(): void {
     // Stops the microphone and lets the relay flush: the recogniser still owes a
     // final for whatever was said last, and aborting here would throw it away.
+    //
+    // The draining run keeps its own reference and shuts itself down. Clearing
+    // the intent here is what lets the next start() open a fresh session without
+    // waiting for that drain — the agent speaks a two-word turn and reopens the
+    // microphone well before the old session's final has come back, and a guard
+    // that waited for it left the participant talking into a dead line.
+    this.wantRunning = false;
     this.capture?.stop();
     this.capture = null;
   }
 
   abort(): void {
+    this.wantRunning = false;
+    // Orphans any in-flight run, so its teardown cannot touch a newer session.
+    this.generation += 1;
     this.capture?.stop();
     this.capture = null;
     this.inFlight?.abort();
     this.inFlight = null;
-    this.running = false;
   }
 
   dispose(): void {

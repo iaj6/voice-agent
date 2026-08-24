@@ -53,12 +53,14 @@ test("an interim is an interim, and a speech_final is a turn", () => {
   assert.equal(parseMessage(final).kind, "final");
 });
 
-test("is_final alone does not end a turn", () => {
-  // is_final means this chunk will not be revised. speech_final means the person
-  // stopped talking. Treating the first as a completed turn cuts people off
-  // mid-sentence, which on a check-in means capturing half a symptom.
+test("is_final alone does not end a turn, but it does settle a segment", () => {
+  // Three distinct states, and collapsing the middle one loses data. is_final
+  // means this chunk will not be revised; speech_final means the person stopped
+  // talking. Treating the first as a completed turn cuts people off mid-sentence
+  // — but treating it as a mere interim discards it, because the next segment
+  // does not repeat it.
   const chunk = { ...final, speech_final: false };
-  assert.equal(parseMessage(chunk).kind, "interim");
+  assert.equal(parseMessage(chunk).kind, "segment");
 });
 
 test("per-word confidence survives, and the minimum is the one to act on", () => {
@@ -72,6 +74,75 @@ test("metadata and empty transcripts are ignored", () => {
   assert.equal(parseMessage({ type: "Metadata" }).kind, "ignore");
   assert.equal(parseMessage({ channel: { alternatives: [{ transcript: "   " }] } }).kind, "ignore");
   assert.equal(parseMessage(null).kind, "ignore");
+});
+
+// Captured from the live socket: twelve seconds of continuous speech, finalized
+// in three non-overlapping segments, only the last one carrying speech_final.
+const segment = (transcript: string, speechFinal: boolean, confidence = 0.95) => ({
+  is_final: true,
+  speech_final: speechFinal,
+  channel: {
+    alternatives: [
+      {
+        transcript,
+        words: transcript
+          .replace(/[.,]/g, "")
+          .split(" ")
+          .map((word) => ({ word: word.toLowerCase(), punctuated_word: word, confidence })),
+      },
+    ],
+  },
+});
+
+const LONG_ANSWER = [
+  "I coughed up blood on Tuesday morning and my chest has been tight ever since.",
+  "And then on Wednesday I had a fever and the chills came on in the evening.",
+  "And I have been so dizzy that I could not stand up in the shower yesterday.",
+];
+
+test("a long answer reaches the agent whole, not just its last sentence", () => {
+  // The defect this replaces: each settled segment overwrote the one before it,
+  // so the agent received only "And I have been so dizzy..." and the coughed-up
+  // blood was discarded before the safety net could ever read it.
+  const stream = createTranscriptStream();
+  const emitted: string[] = [];
+  for (const [i, text] of LONG_ANSWER.entries()) {
+    const parsed = stream.onMessage(segment(text, i === LONG_ANSWER.length - 1));
+    if (parsed.kind === "final") emitted.push(parsed.heard!.text);
+  }
+  assert.equal(emitted.length, 1, "one utterance, not three");
+  assert.equal(emitted[0], LONG_ANSWER.join(" "));
+});
+
+test("the running transcript grows as segments settle, and never shrinks", () => {
+  // The console shows interim text. If a settled segment reset it, the display
+  // would appear to erase what the participant already said.
+  const stream = createTranscriptStream();
+  assert.equal(
+    stream.onMessage(segment(LONG_ANSWER[0], false)).heard?.text,
+    LONG_ANSWER[0],
+  );
+  assert.equal(
+    stream.onMessage(segment(LONG_ANSWER[1], false)).heard?.text,
+    `${LONG_ANSWER[0]} ${LONG_ANSWER[1]}`,
+  );
+});
+
+test("confidence from an early segment survives into the joined turn", () => {
+  // A symptom heard poorly in the first sentence still has to be confirmed after
+  // the third, or the read-back asks about the wrong thing.
+  const stream = createTranscriptStream();
+  stream.onMessage(segment(LONG_ANSWER[0], false, 0.41));
+  const turn = stream.onMessage(segment(LONG_ANSWER[2], true, 0.99));
+  assert.equal(turn.heard?.minConfidence, 0.41);
+  assert.deepEqual(needsConfirmation(turn.heard!, ["blood"]), ["blood"]);
+});
+
+test("segments abandoned when the line drops are still flushed", () => {
+  const stream = createTranscriptStream();
+  stream.onMessage(segment(LONG_ANSWER[0], false));
+  stream.onMessage(segment(LONG_ANSWER[1], false));
+  assert.equal(stream.onClose()?.text, `${LONG_ANSWER[0]} ${LONG_ANSWER[1]}`);
 });
 
 test("a stream that ends without speech_final still yields its last utterance", () => {
@@ -92,6 +163,48 @@ test("a stream that ended properly has nothing left to flush", () => {
 });
 
 const TERMS = ["blood", "chest", "fever"];
+const PHRASES = ["chest pain", "passed out", "coughing up blood", "chest", "decreased appetite"];
+
+test("a phrase heard poorly is flagged, not silently skipped", () => {
+  // Most of the clinical list is phrases — "chest pain", "passed out", every
+  // protocol label. Comparing one word at a time against that list matched none
+  // of them, so an uncertain "passed out" was never read back.
+  const heard = parseMessage({
+    speech_final: true,
+    channel: {
+      alternatives: [
+        {
+          transcript: "I passed out and my chest pain got worse",
+          words: [
+            { word: "passed", confidence: 0.44 },
+            { word: "out", confidence: 0.9 },
+            { word: "chest", confidence: 0.98 },
+            { word: "pain", confidence: 0.38 },
+          ],
+        },
+      ],
+    },
+  }).heard!;
+  assert.deepEqual(needsConfirmation(heard, PHRASES), ["passed out", "chest pain"]);
+});
+
+test("the longest matching term wins, so a phrase is not read back as one word", () => {
+  const heard = parseMessage({
+    speech_final: true,
+    channel: {
+      alternatives: [
+        {
+          transcript: "chest pain",
+          words: [
+            { word: "chest", confidence: 0.99 },
+            { word: "pain", confidence: 0.3 },
+          ],
+        },
+      ],
+    },
+  }).heard!;
+  assert.deepEqual(needsConfirmation(heard, PHRASES), ["chest pain"]);
+});
 
 test("a clinical word the recogniser was unsure of is worth confirming", () => {
   const heard = parseMessage({

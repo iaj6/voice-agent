@@ -23,7 +23,11 @@ export interface DeepgramMessage {
 }
 
 export interface Parsed {
-  kind: "interim" | "final" | "ignore";
+  /**
+   * `segment` is a finalized piece of an utterance the person is still speaking.
+   * `final` is the whole utterance, ready for the agent.
+   */
+  kind: "interim" | "segment" | "final" | "ignore";
   heard: Heard | null;
 }
 
@@ -36,6 +40,9 @@ export interface Parsed {
  * the second one should send an utterance to the agent — treating every
  * `is_final` as a completed turn cuts people off mid-sentence, which on a
  * check-in call means capturing half a symptom.
+ *
+ * The three states are distinct, and collapsing the middle one into `interim`
+ * loses data. See `createTranscriptStream` for why.
  */
 export function parseMessage(raw: unknown): Parsed {
   const message = raw as DeepgramMessage;
@@ -59,7 +66,31 @@ export function parseMessage(raw: unknown): Parsed {
     minConfidence: scored.length ? Math.min(...scored) : null,
   };
 
-  return { kind: message.speech_final ? "final" : "interim", heard };
+  const kind: Parsed["kind"] = message.speech_final
+    ? "final"
+    : message.is_final
+      ? "segment"
+      : "interim";
+  return { kind, heard };
+}
+
+/**
+ * Several finalized segments read back as the one thing the person said.
+ *
+ * Confidence is carried per word, so the minimum survives the join — a symptom
+ * heard poorly in the first sentence still asks to be confirmed after the third.
+ */
+export function joinHeard(parts: readonly Heard[]): Heard {
+  const words = parts.flatMap((p) => p.words);
+  const scored = words.map((w) => w.confidence).filter((c): c is number => c !== null);
+  return {
+    text: parts
+      .map((p) => p.text)
+      .filter(Boolean)
+      .join(" "),
+    words,
+    minConfidence: scored.length ? Math.min(...scored) : null,
+  };
 }
 
 /**
@@ -80,58 +111,125 @@ export function parseMessage(raw: unknown): Parsed {
 export const CONFIRM_BELOW_CONFIDENCE = 0.6;
 
 /**
- * Which clinical words were heard too poorly to record without confirming.
+ * Which clinical terms were heard too poorly to record without confirming.
  *
  * Only clinical terms are checked. A misheard "Tuesday" is a nuisance; a
  * misheard "blood" is a missing adverse event, and asking the participant to
  * repeat every uncertain word would make the call unbearable.
+ *
+ * Matched over word n-grams, because most of the list is phrases — "chest pain",
+ * "passed out", "coughing up blood", and every protocol label from "Decreased
+ * appetite" to "Peripheral sensory neuropathy". Comparing one word at a time
+ * against that list matches none of them, so a badly heard "passed out" would
+ * pass silently. The longest term wins where two overlap, so an uncertain "chest
+ * pain" is read back as the phrase rather than as a bare "chest".
  */
 export function needsConfirmation(heard: Heard, terms: readonly string[]): string[] {
-  const wanted = new Set(terms.map((t) => t.toLowerCase()));
-  return heard.words
-    .filter(
-      (w) =>
-        w.confidence !== null &&
-        w.confidence < CONFIRM_BELOW_CONFIDENCE &&
-        wanted.has(w.word.toLowerCase().replace(/[^a-z]/g, "")),
-    )
-    .map((w) => w.word);
+  const norm = (word: string) => word.toLowerCase().replace(/[^a-z]/g, "");
+  const tokens = heard.words.map((w) => norm(w.word));
+
+  // Longest first, so "chest pain" claims its words before "chest" can.
+  const byLength = [...terms].sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length);
+  const claimed = new Set<number>();
+  const found: { at: number; phrase: string }[] = [];
+
+  for (const term of byLength) {
+    const parts = term.split(/\s+/).map(norm).filter(Boolean);
+    if (!parts.length) continue;
+    for (let i = 0; i + parts.length <= tokens.length; i++) {
+      if (!parts.every((part, k) => tokens[i + k] === part)) continue;
+      const span = [...Array(parts.length).keys()].map((k) => i + k);
+      if (span.some((k) => claimed.has(k))) continue;
+
+      const window = span.map((k) => heard.words[k]);
+      const unsure = window.some(
+        (w) => w.confidence !== null && w.confidence < CONFIRM_BELOW_CONFIDENCE,
+      );
+      // Claimed either way: a term heard confidently still owns its words, so a
+      // shorter term inside it cannot re-flag them.
+      span.forEach((k) => claimed.add(k));
+      if (unsure) found.push({ at: i, phrase: window.map((w) => w.word).join(" ") });
+    }
+  }
+
+  // In the order they were spoken, which is the order they would be read back.
+  return found.sort((a, b) => a.at - b.at).map((f) => f.phrase);
 }
 
 /**
- * Tracks a stream so nothing said last is lost.
+ * Reassembles an utterance from the pieces the recogniser finalizes it in.
  *
- * Only `speech_final` produces a turn, which is right while a call is running
- * and wrong at the end of one. Driving the live socket with audio that stopped
- * abruptly produced three interim results and no final at all — the endpointer
- * never saw the silence it needed, so the last thing said simply never arrived.
+ * A long answer does not arrive whole. Deepgram finalizes it in segments as the
+ * person keeps talking, and each `is_final` segment is *non-overlapping* — once
+ * a segment is settled, later messages start fresh and never repeat it. Only the
+ * last segment carries `speech_final`. So the message that says "the person
+ * stopped talking" contains only the tail of what they said.
+ *
+ * Measured, not assumed. Twelve seconds of speech through the live socket:
+ *
+ *   is_final speech_final=false  "I coughed up blood on Tuesday morning and my
+ *                                 chest has been tight ever since."
+ *   is_final speech_final=false  "And then on Wednesday I had a fever and the
+ *                                 chills came on in the evening."
+ *   is_final speech_final=true   "And I have been so dizzy that I could not
+ *                                 stand up in the shower yesterday."
+ *
+ * Delivering only the `speech_final` message loses the first two sentences —
+ * including the coughed-up blood, which is exactly what the deterministic safety
+ * net exists to catch. It never reaches the net, because the net can only read
+ * what the transcript hands it. Unhurried, multi-symptom answers are what this
+ * study's participants give, so this is the common case and not the edge one.
+ *
+ * So settled segments accumulate, and the turn the agent receives is all of them
+ * joined. Interims are emitted against the accumulated text too, or the console
+ * would appear to erase what the participant already said every few seconds.
+ *
+ * The tail is still held separately: an interim is a hypothesis the recogniser
+ * has not committed to, and it is flushed only if the stream ends without a
+ * final. Driving the live socket with audio that stopped abruptly produced three
+ * segments and no final at all — the endpointer never saw the silence it needed.
  * On a check-in call that is the sentence a participant says before hanging up,
  * which is disproportionately the one that matters.
- *
- * So the last interim is held, and flushed as a final if the stream ends without
- * one. Held rather than emitted eagerly, because an interim is by definition a
- * hypothesis the recogniser has not committed to.
  */
 export function createTranscriptStream() {
+  /** Finalized pieces of the utterance in progress. */
+  let settled: Heard[] = [];
+  /** The unfinalized tail, which the recogniser may still revise. */
   let pending: Heard | null = null;
 
   return {
     /** Returns what to emit, if anything. */
     onMessage(raw: unknown): Parsed {
       const parsed = parseMessage(raw);
-      if (parsed.kind === "interim") {
-        pending = parsed.heard;
-      } else if (parsed.kind === "final") {
+      if (parsed.kind === "ignore" || !parsed.heard) return { kind: "ignore", heard: null };
+
+      if (parsed.kind === "final") {
+        const whole = joinHeard([...settled, parsed.heard]);
+        settled = [];
         pending = null;
+        return { kind: "final", heard: whole };
       }
-      return parsed;
+
+      if (parsed.kind === "segment") {
+        // Settled, but the person is still talking. Anything the recogniser had
+        // provisionally heard is now superseded by this.
+        settled.push(parsed.heard);
+        pending = null;
+      } else {
+        pending = parsed.heard;
+      }
+      return {
+        kind: "interim",
+        heard: joinHeard([...settled, ...(pending ? [pending] : [])]),
+      };
     },
 
     /** The utterance that would otherwise be lost, or null. */
     onClose(): Heard | null {
-      const last = pending;
+      const parts = [...settled, ...(pending ? [pending] : [])];
+      settled = [];
       pending = null;
-      return last;
+      return parts.length ? joinHeard(parts) : null;
     },
   };
 }

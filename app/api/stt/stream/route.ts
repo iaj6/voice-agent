@@ -5,6 +5,11 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/**
+ * Matches the other long-lived routes in this app. Without it the platform's
+ * short default applies and recognition dies a few seconds into a check-in.
+ */
+export const maxDuration = 300;
 
 /**
  * Relays microphone audio to the recogniser, so the credential never leaves the
@@ -38,6 +43,26 @@ const DEEPGRAM_PARAMS = {
   language: "en",
 };
 
+/**
+ * Bounds on how long one relay may live.
+ *
+ * Deepgram bills by connected time, and a client that sends two bytes of
+ * nonsense and stops used to hold a socket open until the far end lost patience
+ * — found by POSTing `{}` at it and watching the request hang.
+ *
+ * Kept under `maxDuration` on purpose. A call with barge-in on holds a single
+ * session for its whole length, so on a platform that kills the function at 300s
+ * the session has to end before that: closing ourselves lets the client see a
+ * clean end and open a fresh session, where being killed mid-stream just looks
+ * to the participant like the microphone died.
+ */
+const MAX_SESSION_MS = 4 * 60 * 1000;
+/**
+ * After the audio ends we owe the recogniser a moment to flush a final. If it
+ * has not closed by then it is not going to.
+ */
+const FLUSH_GRACE_MS = 5_000;
+
 export async function POST(request: Request) {
   const key = process.env.DEEPGRAM_API_KEY;
   if (!key) {
@@ -58,34 +83,42 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const transcripts = createTranscriptStream();
 
-  // Bounds on how long one relay may live. Deepgram bills by connected time, and
-  // a client that sends two bytes of nonsense and stops used to hold a socket
-  // open until the far end lost patience — found by POSTing `{}` at it and
-  // watching the request hang. A check-in is minutes; an hour is generous.
-  const MAX_SESSION_MS = 60 * 60 * 1000;
-  // After the audio ends we owe the recogniser a moment to flush a final. If it
-  // has not closed by then it is not going to.
-  const FLUSH_GRACE_MS = 5_000;
+  // Held out here rather than inside start(), because cancel() has to be able to
+  // reach them. When the participant closes the tab, cancel() fires and the
+  // recogniser keeps talking for a moment afterwards; a listener that then
+  // enqueued onto the dead controller threw out of an event handler, which is an
+  // unhandled exception in the server process rather than a caught error.
+  let sink: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let closed = false;
+  let cap: ReturnType<typeof setTimeout> | undefined;
+
+  const send = (event: unknown) => {
+    if (closed || !sink) return;
+    try {
+      sink.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    } catch {
+      // The client went away between the guard and the write. Nothing more can
+      // be delivered, so stop trying.
+      closed = true;
+    }
+  };
+
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(cap);
+    try {
+      sink?.close();
+    } catch {
+      /* already closed by the client going away */
+    }
+  };
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let closed = false;
-      const send = (event: unknown) => {
-        if (closed) return;
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      };
-      const finish = () => {
-        if (closed) return;
-        closed = true;
-        clearTimeout(cap);
-        try {
-          controller.close();
-        } catch {
-          /* already closed by the client going away */
-        }
-      };
+      sink = controller;
 
-      const cap = setTimeout(() => {
+      cap = setTimeout(() => {
         send({ type: "error", message: "The recognition session exceeded its limit." });
         try {
           upstream.close();
@@ -135,6 +168,7 @@ export async function POST(request: Request) {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (closed) break;
           if (value?.byteLength && upstream.readyState === WebSocket.OPEN) {
             upstream.send(value);
           }
@@ -143,7 +177,7 @@ export async function POST(request: Request) {
         /* the client hung up; fall through and close cleanly */
       }
 
-      if (upstream.readyState === WebSocket.OPEN) {
+      if (!closed && upstream.readyState === WebSocket.OPEN) {
         // Asks the recogniser to flush rather than dropping the connection, so a
         // trailing utterance still gets a final.
         upstream.send(JSON.stringify({ type: "CloseStream" }));
@@ -163,6 +197,10 @@ export async function POST(request: Request) {
     },
 
     cancel() {
+      // The participant hung up. Mark the stream dead before tearing the socket
+      // down, so the close and error events that follow do not try to write.
+      closed = true;
+      clearTimeout(cap);
       try {
         upstream.close();
       } catch {
