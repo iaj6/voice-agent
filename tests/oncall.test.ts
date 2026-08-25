@@ -188,12 +188,18 @@ test("finding the next opening is cheap enough to sit on an open route", () => {
   // Minute-stepping with a fresh Intl formatter cost ~105ms per search, on an
   // unauthenticated route — a burst outside hours pins the event loop.
   const window = parseCallWindow(OFFICE);
-  const started = process.hrtime.bigint();
+  // Best of N, not the mean. A mean measures whatever else the machine was doing
+  // — this failed once in a full run beside the Postgres suites and passed alone,
+  // which is the worst kind of test failure because it teaches you to rerun. The
+  // fastest iteration is the one least polluted by the scheduler, and it still
+  // catches the 105ms regression this guards by a factor of five.
+  let best = Infinity;
   for (let i = 0; i < 20; i++) {
+    const started = process.hrtime.bigint();
     nextOpening(new Date("2026-08-21T22:00:00Z"), window);
+    best = Math.min(best, Number(process.hrtime.bigint() - started) / 1e6);
   }
-  const msEach = Number(process.hrtime.bigint() - started) / 1e6 / 20;
-  assert.ok(msEach < 20, `nextOpening takes ${msEach.toFixed(1)}ms per call`);
+  assert.ok(best < 20, `nextOpening takes ${best.toFixed(1)}ms per call at best`);
 });
 
 test("the reopen time names its timezone", () => {
