@@ -88,7 +88,6 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
 
     if (!this.speaking) {
       this.speaking = true;
-      this.audibleReported = false;
       if (!this.disposed) this.callbacks.onStart();
       void this.drain();
     }
@@ -143,7 +142,20 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
     }
   }
 
-  /** Once per speaking run, at the moment sound actually reaches the line. */
+  /**
+   * Tells the next sentence to report audibility again.
+   *
+   * Called when a turn is dispatched rather than when the queue drains. Resetting
+   * only on the idle-to-speaking transition lost the measurement whenever a turn
+   * began while the previous one was still draining — which is what a
+   * participant answering promptly produces, so the turns it dropped were not a
+   * random sample.
+   */
+  beginTurn(): void {
+    this.audibleReported = false;
+  }
+
+  /** Once per turn, at the moment sound actually reaches the line. */
   private reportAudible(): void {
     if (this.audibleReported || this.disposed) return;
     this.audibleReported = true;
@@ -181,7 +193,15 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
     });
   }
 
-  /** Last-resort local synthesis, awaited so queue ordering is preserved. */
+  /**
+   * Last-resort local synthesis, awaited so queue ordering is preserved.
+   *
+   * Reports audibility like any other sentence. It did not, and the turns that
+   * take this path are the ones where the neural provider timed out — the
+   * slowest turns in the call. Excluding exactly those from the p50 and p95 made
+   * N-01 look better than it is, and `latency.mjs` then described them as turns
+   * that "produced no audio at all", which is the opposite of what happened.
+   */
   private speakLocally(text: string): Promise<void> {
     return new Promise((resolve) => {
       if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -190,6 +210,7 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
       }
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.98;
+      utterance.onstart = () => this.reportAudible();
       const done = () => resolve();
       utterance.onend = done;
       utterance.onerror = done;

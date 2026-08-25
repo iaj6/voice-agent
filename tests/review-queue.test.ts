@@ -118,6 +118,20 @@ test("a call that never completed is flagged as dropped", () => {
   assert.ok(reasons.some((r) => r.kind === "dropped_call"));
 });
 
+test("reasons come back worst first, because that is the order they are shown in", () => {
+  // The badge row is the coordinator's triage signal and is rendered in order,
+  // so a call with a routine escalation and a serious event was leading with the
+  // routine one.
+  const reasons = reasonsFor(
+    call({
+      escalations: [escalation("routine")],
+      events: [{ grade: 4 as never, serious: true, spontaneous: false, limitsSelfCare: true }],
+    }),
+  );
+  assert.equal(reasons[0].kind, "serious_event");
+  assert.equal(reasons[reasons.length - 1].kind, "routine_escalation");
+});
+
 test("a call carries every reason it has, not just the worst", () => {
   // The rank decides position; the coordinator still needs the whole list,
   // because "serious event" and "the agent invented a quote" are two different

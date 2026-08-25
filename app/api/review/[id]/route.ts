@@ -2,7 +2,8 @@ import { getSession } from "@/lib/store/session";
 import { getLatencyStore } from "@/lib/store/latency";
 import { getDeliveryStore } from "@/lib/store/deliveries";
 import { reasonsFor } from "@/lib/review/queue";
-import { listSummaries } from "@/lib/store/summaries";
+import { summariseSession } from "@/lib/store/summaries";
+import { reviewAuthorised, reviewRefusal } from "@/lib/review/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,18 +23,22 @@ export const dynamic = "force-dynamic";
  * are gone, not a 500.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (!reviewAuthorised(request)) return reviewRefusal();
+
   const { id } = await params;
   const session = await getSession(id);
   if (!session) {
     return Response.json({ error: "Unknown call" }, { status: 404 });
   }
 
-  const [summary] = await listSummaries({ limit: 2000, includeSynthetic: true }).then(
-    (all) => all.filter((c) => c.id === id),
-  );
+  // Summarised from this session directly. Scanning the 2,000 most recent calls
+  // and filtering in JS meant an older call opened with no reasons at all —
+  // indistinguishable from a clean one — while loading every row's whole record
+  // JSONB to find one id.
+  const summary = summariseSession(session);
 
   const [turns, deliveries] = await Promise.all([
     getLatencyStore().forSession(id),
@@ -47,6 +52,11 @@ export async function GET(
       completedAt: session.completedAt ?? null,
       status: session.status,
       synthetic: session.synthetic,
+      // The real signal. Sealed arrays come back as `[]` rather than a marker,
+      // so a shredded transcript is indistinguishable from an absent one by
+      // looking at the words — which made the reviewer's banner unreachable and
+      // labelled an erased call as one that never got past verification.
+      shredded: session.shredded,
       subject: session.subject,
       verificationAttempts: session.verificationAttempts,
       provenanceRejections: session.provenanceRejections,

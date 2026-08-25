@@ -90,6 +90,13 @@ export interface SpeechSynthesizer {
    * still in flight, leaving the UI stuck on "speaking" with the mic shut.
    */
   isIdle(): boolean;
+  /**
+   * Marks the start of a new turn, so the next sentence reports audibility.
+   *
+   * Separate from `enqueue` because a turn is several sentences and only the
+   * first of them is the wait N-01 describes.
+   */
+  beginTurn?(): void;
   cancel(): void;
   dispose(): void;
 }

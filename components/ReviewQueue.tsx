@@ -48,20 +48,86 @@ export function ReviewQueue() {
   const [showAll, setShowAll] = useState(false);
   const [includeSynthetic, setIncludeSynthetic] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [needsToken, setNeedsToken] = useState(false);
+  const [token, setToken] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const params = new URLSearchParams({ days: "30" });
     if (showAll) params.set("all", "1");
     if (includeSynthetic) params.set("synthetic", "1");
+
+    // Guards against a slow earlier request landing after a fast later one and
+    // repainting the queue with the wrong filter's results.
+    let current = true;
     fetch(`/api/review?${params}`)
-      .then((r) => r.json())
-      .then((data) => {
+      .then(async (r) => {
+        const data = await r.json();
+        if (!current) return;
+        if (r.status === 401) {
+          setError(null);
+          setNeedsToken(true);
+          return;
+        }
         if (data.error) throw new Error(data.error);
+        // Cleared on success. Leaving it set meant one transient failure showed
+        // a stale message forever, through every later successful refetch.
+        setError(null);
+        setNeedsToken(false);
         setRows(data.queue);
         setScanned(data.scanned);
       })
-      .catch((e) => setError(String(e.message ?? e)));
-  }, [showAll, includeSynthetic]);
+      .catch((e) => {
+        if (current) setError(String(e.message ?? e));
+      });
+    return () => {
+      current = false;
+    };
+  }, [showAll, includeSynthetic, attempt]);
+
+  if (needsToken) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ background: "var(--color-ink-000)" }}
+      >
+        <form
+          className="flex w-80 flex-col gap-3 border p-5"
+          style={{ borderColor: "var(--color-line)" }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            // Session cookie, not persistent: a review token left on disk on a
+            // shared clinic machine is the same disclosure by a slower route.
+            document.cookie = `voice_agent_review=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
+            setToken("");
+            setAttempt((n) => n + 1);
+          }}
+        >
+          <span className="stamp stamp-lit">Review access</span>
+          <p className="text-[11px] leading-relaxed" style={{ color: "var(--color-bone-faint)" }}>
+            This surface reads what participants said, including the date of birth
+            they spoke to verify their identity. It is closed without the review
+            secret.
+          </p>
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="review secret"
+            className="border bg-transparent px-2 py-1.5 text-[12px]"
+            style={{ borderColor: "var(--color-line-lit)", color: "var(--color-bone)" }}
+          />
+          <button
+            type="submit"
+            className="border px-2 py-1.5 text-[11px]"
+            style={{ borderColor: "var(--color-line-lit)", color: "var(--color-bone)" }}
+          >
+            Unlock
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ink-000)" }}>

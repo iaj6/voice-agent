@@ -47,6 +47,12 @@ export async function POST(request: Request) {
   if (!session) {
     return Response.json({ error: "Unknown session" }, { status: 404 });
   }
+  if (session.completedAt) {
+    // The docstring above claimed this and the code did not do it. Without it,
+    // any session id — including a long-completed, locked one — writes unbounded
+    // rows into the table the N-01 sign-off is computed from.
+    return Response.json({ error: "This check-in is complete and locked." }, { status: 409 });
+  }
 
   try {
     await getLatencyStore().record({

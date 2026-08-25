@@ -1,5 +1,6 @@
 import { listSummaries } from "@/lib/store/summaries";
 import { buildQueue } from "@/lib/review/queue";
+import { reviewAuthorised, reviewRefusal } from "@/lib/review/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,12 +14,18 @@ export const dynamic = "force-dynamic";
  * side effect of loading a page.
  */
 export async function GET(request: Request) {
+  if (!reviewAuthorised(request)) return reviewRefusal();
+
   const url = new URL(request.url);
-  const days = Number(url.searchParams.get("days") ?? "30");
+  const requested = Number(url.searchParams.get("days") ?? "30");
+  // Non-numeric produced NaN, which reached toISOString() as an Invalid Date and
+  // threw a 500 on Postgres while silently returning an empty queue in memory —
+  // two backends disagreeing about the same bad input.
+  const days = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 365) : 30;
   const includeUnflagged = url.searchParams.get("all") === "1";
   const includeSynthetic = url.searchParams.get("synthetic") === "1";
 
-  const since = new Date(Date.now() - Math.min(Math.max(days, 1), 365) * 86_400_000);
+  const since = new Date(Date.now() - days * 86_400_000);
   const calls = await listSummaries({ since, limit: 2000, includeSynthetic });
   const queue = buildQueue(calls, { includeUnflagged });
 

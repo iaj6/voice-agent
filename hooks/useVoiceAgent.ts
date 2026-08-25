@@ -209,6 +209,7 @@ export function useVoiceAgent() {
       // The clock N-01 is actually about starts here: the participant has
       // finished speaking and is now waiting in silence. It stops when they hear
       // something, which only this side can observe.
+      synthRef.current?.beginTurn?.();
       pendingLatencyRef.current = {
         sessionId: sid,
         source,

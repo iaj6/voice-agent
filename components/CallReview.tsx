@@ -10,6 +10,7 @@ interface Detail {
     completedAt: string | null;
     status: string;
     synthetic: boolean;
+    shredded: boolean;
     subject: { subjectId?: string } | null;
     verificationAttempts: number;
     provenanceRejections: number;
@@ -36,7 +37,14 @@ interface Detail {
   latency: { turnIndex: number; firstAudioMs: number | null; firstSentenceMs: number | null }[];
 }
 
-/** Sealed fields come back as these when the key has been destroyed. */
+/**
+ * Sealed *strings* come back as these; sealed arrays come back empty.
+ *
+ * Which is why the call's own `shredded` flag decides the banner rather than the
+ * contents of the transcript: an erased transcript and an absent one look
+ * identical from here, and guessing wrong tells a reviewer a completed call
+ * never got past verification.
+ */
 const SHRED_MARKERS = ["[destroyed]", "[unreadable]"];
 const isShredded = (v: string | null) => v !== null && SHRED_MARKERS.includes(v);
 
@@ -75,7 +83,7 @@ export function CallReview({ id }: { id: string }) {
     );
   }
 
-  const shredded = data.saidByParticipant.some((u) => isShredded(u));
+  const shredded = data.call.shredded;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ink-000)" }}>
@@ -124,7 +132,9 @@ export function CallReview({ id }: { id: string }) {
           <Section title="What the participant said">
             {data.saidByParticipant.length === 0 ? (
               <p className="text-[11.5px]" style={{ color: "var(--color-bone-faint)" }}>
-                Nothing recorded — the call did not get past verification.
+                {shredded
+                  ? "Erased at this participant's request. The structured record below is what survives."
+                  : "Nothing recorded — the call did not get past verification."}
               </p>
             ) : (
               <ol className="flex flex-col gap-2">

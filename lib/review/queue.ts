@@ -151,7 +151,12 @@ export function reasonsFor(call: CallSummary): ReviewReason[] {
     });
   }
 
-  return reasons;
+  // Sorted before returning. The badge row is the coordinator's triage signal
+  // and it is rendered in order, so a call with a routine escalation and a
+  // serious event was leading with the routine one.
+  return reasons.sort(
+    (a, b) => PRECEDENCE.indexOf(a.kind) - PRECEDENCE.indexOf(b.kind),
+  );
 }
 
 export function rankOf(reasons: readonly ReviewReason[]): number {

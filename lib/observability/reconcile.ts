@@ -168,13 +168,32 @@ export function reconcile(
   const claimed = new Set<number>();
 
   for (const event of agentEvents) {
-    const index = ediary.findIndex(
-      (entry, i) =>
-        !claimed.has(i) &&
-        entry.subjectId === event.subjectId &&
-        sameSymptom(entry.term, event.codedTerm) &&
-        withinWindow(entry.date, event.recordedAt),
-    );
+    // Best fit, not first fit. A participant who logged "Fatigue" grade 1 on
+    // Sunday and grade 3 on Tuesday would otherwise have the agent's Tuesday
+    // grade-3 event claim the Sunday row: one fabricated grade disagreement plus
+    // one fabricated eDiary-only, from a case where both systems agreed exactly.
+    //
+    // Nearest date first, with grade agreement breaking a tie — the two signals
+    // that say "the same event" when the terms already match.
+    const candidates = ediary
+      .map((entry, i) => ({ entry, i }))
+      .filter(
+        ({ entry, i }) =>
+          !claimed.has(i) &&
+          entry.subjectId === event.subjectId &&
+          sameSymptom(entry.term, event.codedTerm) &&
+          withinWindow(entry.date, event.recordedAt),
+      )
+      .sort((a, b) => {
+        const gap = (c: { entry: EDiaryEntry }) =>
+          Math.abs(Date.parse(c.entry.date) - Date.parse(event.recordedAt));
+        const byDate = gap(a) - gap(b);
+        if (byDate !== 0) return byDate;
+        const agrees = (c: { entry: EDiaryEntry }) =>
+          typeof c.entry.grade === "number" && c.entry.grade === event.grade ? 0 : 1;
+        return agrees(a) - agrees(b);
+      });
+    const index = candidates.length ? candidates[0].i : -1;
 
     if (index === -1) {
       rows.push({

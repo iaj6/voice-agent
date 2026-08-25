@@ -112,6 +112,32 @@ test("every unmatched row leaves the cause for a human", () => {
   for (const row of rows) assert.equal(row.cause, "");
 });
 
+test("the nearest entry wins, so one agreement is not split into two disagreements", () => {
+  // A participant logs Fatigue grade 1 on Sunday and grade 3 on Tuesday. First-fit
+  // matching gave the agent's Tuesday grade-3 event the Sunday row — one
+  // fabricated grade disagreement, plus the true pair reported as eDiary-only,
+  // from a case where both systems agreed exactly.
+  const { summary } = reconcile(
+    [event({ grade: 3 as never, recordedAt: "2026-09-04T10:00:00.000Z" })],
+    [
+      entry({ date: "2026-09-02", grade: 1 }),
+      entry({ date: "2026-09-04", grade: 3 }),
+    ],
+  );
+  assert.equal(summary.matched, 1, "the same-day, same-grade entry was chosen");
+  assert.equal(summary.gradeMismatches, 0, "no fabricated disagreement");
+  assert.equal(summary.ediaryOnly, 1, "the Sunday entry is genuinely unmatched");
+});
+
+test("with two equally close entries, the one that agrees on grade wins", () => {
+  const { summary } = reconcile(
+    [event({ grade: 3 as never, recordedAt: "2026-09-02T12:00:00.000Z" })],
+    [entry({ date: "2026-09-02", grade: 1 }), entry({ date: "2026-09-02", grade: 3 })],
+  );
+  assert.equal(summary.matched, 1);
+  assert.equal(summary.gradeMismatches, 0);
+});
+
 test("agreement is reported as a floor, and as nothing when there is nothing", () => {
   assert.equal(reconcile([], []).summary.agreementFloor, null);
   const { summary } = reconcile([event()], [entry()]);

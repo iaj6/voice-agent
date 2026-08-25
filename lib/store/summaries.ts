@@ -17,7 +17,7 @@
 import type { CtcaeGrade, EscalationUrgency } from "../clinical/safety.ts";
 import { getDb, isDatabaseConfigured } from "./db.ts";
 import { getSessionStore } from "./session-store.ts";
-import type { SessionStatus } from "./session.ts";
+import type { CheckInSession, SessionStatus } from "./session.ts";
 
 export interface EventSummary {
   grade: CtcaeGrade;
@@ -146,6 +146,26 @@ function summarise(row: {
   };
 }
 
+/**
+ * One already-loaded session, summarised.
+ *
+ * Shares `summarise` with the list path so a single call and a listed one cannot
+ * disagree about why a call is flagged — which is what happened when the detail
+ * page derived its reasons from a bounded scan and quietly found nothing.
+ */
+export function summariseSession(session: CheckInSession): CallSummary {
+  return summarise({
+    id: session.id,
+    createdAt: session.createdAt,
+    completedAt: session.completedAt ?? null,
+    status: session.status,
+    record: session as unknown as Record<string, unknown>,
+    subjectPresent: Boolean(session.subject),
+    provenanceRejections: Number(session.provenanceRejections ?? 0),
+    synthetic: Boolean(session.synthetic),
+  });
+}
+
 export async function listSummaries(query: SummaryQuery = {}): Promise<CallSummary[]> {
   const limit = query.limit ?? 500;
   const includeSynthetic = query.includeSynthetic === true;
@@ -224,7 +244,23 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
  * systems disagree or merely used different words, and they are also the reason
  * a reconciliation CSV is a PHI document the moment it leaves the machine.
  * Making that a deliberate flag rather than a default is the difference.
+ *
+ * Against Postgres it is refused rather than silently ignored. The verbatim
+ * halves are sealed per session, so producing them means fetching a key per
+ * call, and this reader's whole premise is that it never holds one. Returning
+ * an empty column while the caller printed "this file contains participants'
+ * own words" is the worst of both — a useless file, mislabelled as dangerous.
  */
+export class VerbatimUnavailableError extends Error {
+  constructor() {
+    super(
+      "Verbatim terms cannot be exported from the database path: they are sealed " +
+        "per session and this reader deliberately holds no key. Export without " +
+        "--verbatim, or add a key-holding export that says so in its own audit entry.",
+    );
+    this.name = "VerbatimUnavailableError";
+  }
+}
 export interface StoredEvent {
   subjectId: string;
   sessionId: string;
@@ -255,6 +291,8 @@ export async function listAdverseEvents(
       }));
     });
   }
+
+  if (query.includeVerbatim) throw new VerbatimUnavailableError();
 
   const sql = getDb();
   const rows = (await sql`

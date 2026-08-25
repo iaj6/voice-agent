@@ -123,9 +123,46 @@ if (windows.length >= 2) {
   );
 }
 
+if (process.argv.includes("--record") && includeSynthetic) {
+  // The history file is the trend of the real study. A row built from harness
+  // calls looks identical to a real one once it is written, and the whole reason
+  // the synthetic boundary exists is that nobody could tell them apart later.
+  console.error(
+    C.bad(`\n  Refusing to record: --include-synthetic mixes harness calls into a\n`) +
+      C.bad(`  file whose only purpose is the real study's trend.\n`),
+  );
+  process.exit(1);
+}
+
 if (process.argv.includes("--record")) {
-  const latest = windows[windows.length - 1];
-  appendFileSync("docs/drift-history.jsonl", `${JSON.stringify(latest)}\n`);
-  console.log(C.good(`\n  recorded ${latest.week} to docs/drift-history.jsonl`));
+  // The newest *complete* week. Recording the in-progress one appends a partial
+  // row, and running again the next day appends a second row for the same week
+  // with different numbers — which makes the history file untrendable, and it is
+  // the only thing that file is for.
+  const cutoff = Date.now() - 7 * 86_400_000;
+  const complete = windows.filter((w) => Date.parse(w.week) + 7 * 86_400_000 <= Date.now());
+  const latest = complete[complete.length - 1];
+  if (!latest) {
+    console.log(
+      C.dim(`\n  nothing to record: no week has finished yet (cutoff ${new Date(cutoff).toISOString().slice(0, 10)})`),
+    );
+  } else {
+    const already = (() => {
+      try {
+        return readFileSync("docs/drift-history.jsonl", "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .some((line) => JSON.parse(line).week === latest.week);
+      } catch {
+        return false;
+      }
+    })();
+    if (already) {
+      console.log(C.dim(`\n  ${latest.week} is already recorded; not appending a second row`));
+    } else {
+      appendFileSync("docs/drift-history.jsonl", `${JSON.stringify(latest)}\n`);
+      console.log(C.good(`\n  recorded ${latest.week} to docs/drift-history.jsonl`));
+    }
+  }
 }
 console.log();

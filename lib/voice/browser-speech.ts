@@ -268,13 +268,25 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
     if (!this.speaking) {
       // idle -> speaking transition
       this.speaking = true;
-      this.audibleReported = false;
       if (!this.disposed) this.callbacks.onStart();
       this.drain();
     }
   }
 
-  /** Once per speaking run, at the moment sound actually reaches the line. */
+  /**
+   * Tells the next sentence to report audibility again.
+   *
+   * Called when a turn is dispatched rather than when the queue drains. Resetting
+   * only on the idle-to-speaking transition lost the measurement whenever a turn
+   * began while the previous one was still draining — which is what a
+   * participant answering promptly produces, so the turns it dropped were not a
+   * random sample.
+   */
+  beginTurn(): void {
+    this.audibleReported = false;
+  }
+
+  /** Once per turn, at the moment sound actually reaches the line. */
   private reportAudible(): void {
     if (this.audibleReported || this.disposed) return;
     this.audibleReported = true;
