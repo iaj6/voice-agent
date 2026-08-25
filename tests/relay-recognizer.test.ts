@@ -102,6 +102,24 @@ function stubFetch(status = 200) {
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
+/**
+ * Waits for a condition instead of for a duration.
+ *
+ * The reconnect path schedules itself 250ms out and then does async work, so a
+ * fixed sleep that is comfortable on an idle machine is not comfortable while
+ * the Postgres suites are running beside it — which showed up as an
+ * intermittent failure in the full run and never in isolation. Polling keeps the
+ * assertion exactly as strong and stops it measuring machine load.
+ */
+async function waitFor(condition: () => boolean, label: string, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
 const callbacks = () => ({
   onInterim: () => {},
   onFinal: () => {},
@@ -284,9 +302,7 @@ test("a session that ends while we still want to listen is rebuilt", async () =>
   assert.equal(captures.length, 1);
 
   endSession?.();
-  await new Promise((r) => setTimeout(r, 400));
-
-  assert.ok(captures.length >= 2, "a fresh session replaced the one that ended");
+  await waitFor(() => captures.length >= 2, "a fresh session to replace the one that ended");
   recognizer.dispose();
 });
 
@@ -301,8 +317,7 @@ test("a relay with no credential gives up instead of retrying a metered socket",
   });
 
   recognizer.start();
-  await new Promise((r) => setTimeout(r, 400));
-
+  await waitFor(() => unavailable > 0, "the caller to be told it can fall back");
   assert.equal(unavailable, 1, "the caller is told once, so it can fall back");
   assert.equal(captures.length, 1, "and it did not reconnect in a loop");
   assert.equal(captures[0].stopped, true);
@@ -329,10 +344,8 @@ test("a relay that has worked before retries instead of downgrading the call", a
 
   failNext = true;
   endSession?.();
-  await new Promise((r) => setTimeout(r, 500));
-
+  await waitFor(() => captures.length >= 2, "a retry after the dropped session");
   assert.equal(unavailable, 0, "a working relay is not abandoned over one failure");
-  assert.ok(captures.length >= 2, "it tried again");
   recognizer.dispose();
 });
 
@@ -354,8 +367,7 @@ test("a relay that answers 200 and then errors hands back on the first try", asy
   await settle();
   sessions[0].deliver("error", "");
   sessions[0].end();
-  await new Promise((r) => setTimeout(r, 500));
-
+  await waitFor(() => handedBack > 0, "the fallback to be offered");
   assert.equal(handedBack, 1, "the fallback is offered");
   assert.equal(captures.length, 1, "and no retry storm");
   assert.equal(errors, 0, "no banner for a failure we are recovering from");
