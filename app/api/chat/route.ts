@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/store/session";
 import { runTurn } from "@/lib/agent/runner";
+import { getLatencyStore } from "@/lib/store/latency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,17 +43,43 @@ export async function POST(request: Request) {
     );
   }
 
+  // Counted before the turn runs, so the browser can name the same turn without
+  // the two having to agree on anything else.
+  const turnIndex = session.messages.length;
+  const startedAt = Date.now();
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
+
+      // Where the wait went, so a bad p95 can be attributed rather than noticed.
+      let firstTokenMs: number | null = null;
+      let firstSentenceMs: number | null = null;
+      let spokeBeforeTools: boolean | null = null;
+
       try {
+        // Named so the browser can attach what it heard to this turn.
+        send({ type: "turn", index: turnIndex });
+
         for await (const event of runTurn(session, {
           utterance: utterance.trim(),
           source: source === "system" ? "system" : "subject",
         })) {
+          const at = Date.now() - startedAt;
+          if (event.type === "delta" && firstTokenMs === null) firstTokenMs = at;
+          if (event.type === "speak" && firstSentenceMs === null) {
+            firstSentenceMs = at;
+            // Speaking first is the rule that exists because this went wrong: a
+            // turn that called tools before saying anything left the participant
+            // in silence with no way to tell the call from a dropped one.
+            if (spokeBeforeTools === null) spokeBeforeTools = true;
+          }
+          if (event.type === "tool_call" && spokeBeforeTools === null) {
+            spokeBeforeTools = false;
+          }
           send(event);
         }
       } catch (err) {
@@ -61,6 +88,21 @@ export async function POST(request: Request) {
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
+        // Never at the cost of the turn. A metrics write that throws would turn
+        // an observability feature into an outage on the call path.
+        try {
+          await getLatencyStore().record({
+            sessionId: session.id,
+            turnIndex,
+            source: source === "system" ? "system" : "subject",
+            firstTokenMs,
+            firstSentenceMs,
+            totalMs: Date.now() - startedAt,
+            spokeBeforeTools,
+          });
+        } catch {
+          /* observability is not worth a dropped turn */
+        }
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       }

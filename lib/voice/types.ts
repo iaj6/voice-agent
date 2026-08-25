@@ -58,6 +58,16 @@ export interface SpeechRecognizer {
 
 export interface SynthesizerCallbacks {
   onStart(): void;
+  /**
+   * Fires when the agent first becomes *audible* in a speaking run.
+   *
+   * Deliberately separate from `onStart`, which fires when the first sentence is
+   * queued — before the synthesis request has been made, let alone played. The
+   * gap between the two is most of the latency a participant actually
+   * experiences, so measuring N-01 from `onStart` would report a number that
+   * looks good because it excludes the wait it is supposed to describe.
+   */
+  onAudible?(): void;
   /** Fires when the queue drains, not per utterance. */
   onIdle(): void;
   onError(message: string): void;

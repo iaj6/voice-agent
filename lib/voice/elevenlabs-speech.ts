@@ -40,6 +40,8 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
   private endPlayback: (() => void) | null = null;
   private spokenHistory: { text: string; at: number }[] = [];
   private fallbackCount = 0;
+  /** Whether this speaking run has already reported becoming audible. */
+  private audibleReported = false;
 
   constructor(
     private readonly callbacks: SynthesizerCallbacks & {
@@ -86,6 +88,7 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
 
     if (!this.speaking) {
       this.speaking = true;
+      this.audibleReported = false;
       if (!this.disposed) this.callbacks.onStart();
       void this.drain();
     }
@@ -130,6 +133,7 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
       if (blob && blob.size > 0) {
         await this.playBlob(blob);
       } else {
+        // A fallback sentence is still the agent becoming audible.
         this.fallbackCount += 1;
         this.callbacks.onFallback?.(
           `Synthesis unavailable for one sentence; spoke it with the browser voice instead.`,
@@ -137,6 +141,13 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
         await this.speakLocally(item.text);
       }
     }
+  }
+
+  /** Once per speaking run, at the moment sound actually reaches the line. */
+  private reportAudible(): void {
+    if (this.audibleReported || this.disposed) return;
+    this.audibleReported = true;
+    this.callbacks.onAudible?.();
   }
 
   private playBlob(blob: Blob): Promise<void> {
@@ -147,6 +158,9 @@ export class ElevenLabsSynthesizer implements SpeechSynthesizer {
 
       const el = new Audio(url);
       this.audioEl = el;
+      // `playing`, not `play()` resolving: the promise settles when playback has
+      // been permitted to begin, this fires when it has actually begun.
+      el.onplaying = () => this.reportAudible();
 
       const done = () => {
         el.onended = null;

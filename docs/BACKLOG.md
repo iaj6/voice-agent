@@ -148,7 +148,8 @@ produces it.*
 | 5.1 | Coordinator review queue with per-call replay | A | A coordinator can review a call and its record together | todo |
 | 5.2 | Drift monitoring: grade distribution, escalation rate, confidence | A | Weekly trend; a shift is visible | todo |
 | 5.3 | Reconciliation export against the existing eDiary | A | Per-participant comparison file | todo |
-| 5.4 | Latency measured at p50/p95 | A | N-01 verifiable rather than asserted | todo |
+| 5.4 | Latency measured at p50/p95 | A | N-01 verifiable rather than asserted | **done — `turn_latency` per turn, `scripts/latency.mjs` reports it against N-01. The measurement's first run says N-01 is missed by roughly 2x (5.2s p50 to first sentence out, against a 2s target for first audio), which is the point of measuring it. The browser half is wired but unrecorded until 4.4 puts a real microphone in the loop.** |
+| 5.6 | The verification turn is silent for five seconds | B | The agent acknowledges before calling verify_subject | **open, found 2026-08-25 by 5.4 — `spokeBeforeTools` is false on turn index 4 of every call measured, without exception. That is the turn where the participant has just said their date of birth and is waiting to learn whether they were recognised; the agent calls `verify_subject` without saying anything first and the line is silent for 5.5s against 3.5s on turns that acknowledge. The prompt already requires speaking first — "Speak before you work" — so this is the model not following an instruction rather than a missing one, which makes it a prompt change and Tier B. Measured cost: 1.96s at p50.** |
 | 5.5 | Review-rate rationale documented | C | Reviewed | todo |
 
 ---

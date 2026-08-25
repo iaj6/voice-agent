@@ -120,6 +120,20 @@ export function useVoiceAgent() {
   const pendingRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const bargeInRef = useRef(false);
+  /**
+   * The turn currently being waited on, and what it has cost so far.
+   *
+   * Held rather than sent immediately because the two halves arrive out of
+   * order: the agent can become audible before the turn stream finishes naming
+   * the turn, and a measurement with nowhere to go is a measurement lost.
+   */
+  const pendingLatencyRef = useRef<{
+    sessionId: string;
+    source: "subject" | "system";
+    startedAt: number;
+    turnIndex: number | null;
+    firstAudioMs: number | null;
+  } | null>(null);
   const agentLineRef = useRef<string | null>(null);
 
   const setCallState = useCallback((next: CallState) => {
@@ -152,6 +166,37 @@ export function useVoiceAgent() {
     );
   }, []);
 
+  /**
+   * Sends the measurement once both halves of it exist.
+   *
+   * Fire-and-forget, and silent on failure. Telemetry that interrupts a
+   * check-in to report that it could not record how long a check-in took is
+   * worse than no telemetry.
+   */
+  const reportLatency = useCallback(async () => {
+    const pending = pendingLatencyRef.current;
+    if (!pending || pending.turnIndex === null || pending.firstAudioMs === null) {
+      return;
+    }
+    const payload = {
+      sessionId: pending.sessionId,
+      turnIndex: pending.turnIndex,
+      source: pending.source,
+      firstAudioMs: pending.firstAudioMs,
+    };
+    pendingLatencyRef.current = null;
+    try {
+      await fetch("/api/telemetry/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+    } catch {
+      /* a lost measurement is not worth a visible failure */
+    }
+  }, []);
+
   const sendTurn = useCallback(
     async (utterance: string, source: "subject" | "system") => {
       const sid = sessionIdRef.current;
@@ -160,6 +205,17 @@ export function useVoiceAgent() {
       busyRef.current = true;
       agentLineRef.current = null;
       setCallState("thinking");
+
+      // The clock N-01 is actually about starts here: the participant has
+      // finished speaking and is now waiting in silence. It stops when they hear
+      // something, which only this side can observe.
+      pendingLatencyRef.current = {
+        sessionId: sid,
+        source,
+        startedAt: Date.now(),
+        turnIndex: null,
+        firstAudioMs: null,
+      };
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -250,6 +306,15 @@ export function useVoiceAgent() {
               case "done":
                 terminal = Boolean(event.terminal);
                 break;
+              case "turn":
+                // The server names the turn so both halves of the measurement
+                // land on the same row without having to agree on anything else.
+                if (pendingLatencyRef.current) {
+                  pendingLatencyRef.current.turnIndex = Number(event.index);
+                  // The agent may already have been heard by now.
+                  void reportLatency();
+                }
+                break;
               case "error":
                 setError(String(event.message));
                 break;
@@ -292,7 +357,7 @@ export function useVoiceAgent() {
         if (!bargeInRef.current) recognizerRef.current?.start();
       }
     },
-    [appendAgentText, setCallState],
+    [appendAgentText, setCallState, reportLatency],
   );
 
   const handleFinal = useCallback(
@@ -397,6 +462,12 @@ export function useVoiceAgent() {
         setCallState("listening");
         if (!bargeInRef.current) recognizerRef.current?.start();
       },
+      onAudible: () => {
+        const pending = pendingLatencyRef.current;
+        if (!pending || pending.firstAudioMs !== null) return;
+        pending.firstAudioMs = Date.now() - pending.startedAt;
+        void reportLatency();
+      },
       onError: (message: string) => setError(`Speech synthesis: ${message}`),
     };
 
@@ -468,7 +539,7 @@ export function useVoiceAgent() {
       recognizerRef.current = null;
       synthRef.current = null;
     };
-  }, [handleFinal, handleInterim, setCallState, neuralVoice]);
+  }, [handleFinal, handleInterim, setCallState, neuralVoice, reportLatency]);
 
   const startCall = useCallback(async () => {
     // Abort, not stop. endCall() leaves the relay draining on purpose so the

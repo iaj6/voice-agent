@@ -17,6 +17,7 @@
     "eval": "node scripts/simulate.mjs",
     "eval:fast": "node scripts/simulate.mjs --fast",
     "eval:stability": "node scripts/simulate.mjs --fast --repeat=5",
+    "latency": "node scripts/latency.mjs",
     "verify": "node scripts/verify.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
   },

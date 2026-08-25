@@ -214,6 +214,8 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
   readonly supported: boolean;
   private queue: string[] = [];
   private speaking = false;
+  /** Whether this speaking run has already reported becoming audible. */
+  private audibleReported = false;
   private current = "";
   private voice: SpeechSynthesisVoice | null = null;
   /**
@@ -266,9 +268,17 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
     if (!this.speaking) {
       // idle -> speaking transition
       this.speaking = true;
+      this.audibleReported = false;
       if (!this.disposed) this.callbacks.onStart();
       this.drain();
     }
+  }
+
+  /** Once per speaking run, at the moment sound actually reaches the line. */
+  private reportAudible(): void {
+    if (this.audibleReported || this.disposed) return;
+    this.audibleReported = true;
+    this.callbacks.onAudible?.();
   }
 
   currentText() {
@@ -305,6 +315,9 @@ export class BrowserSynthesizer implements SpeechSynthesizer {
 
     const generation = this.generation;
     const utterance = new SpeechSynthesisUtterance(next);
+    // The browser engine has no queueing layer of its own, so the utterance
+    // starting is the moment it becomes audible.
+    utterance.onstart = () => this.reportAudible();
     if (this.voice) utterance.voice = this.voice;
     // Slightly under default. Trial participants may be elderly or fatigued,
     // and rushed speech is the fastest way to lose a check-in answer.

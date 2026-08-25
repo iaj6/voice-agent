@@ -109,7 +109,7 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
 
 | | Requirement | Current |
 |---|---|---|
-| **N-01 (P)** | Time to first audio under 2s at p50, under 4s at p95 | ~2.5s p50, unmeasured p95 |
+| **N-01 (P)** | Time to first audio under 2s at p50, under 4s at p95 | **Missed, and now measured rather than felt.** The first sentence leaves the server at 5.2s p50 on subject turns — before synthesis has begun, so time to first *audio* is later still. The "~2.5s p50" this row used to claim was optimistic by roughly 2x. Measured with `scripts/latency.mjs` over 19 turns of eval calls; unchanged when run serially, so it is not a concurrency artifact. Turns that acknowledge before calling tools reach 3.5s p50 and turns that do not reach 5.5s — **1.96s of the wait is the acknowledge-before-tools rule being broken**, which happens on every verification turn. The final leg, dispatch to audible, is browser-only and still unmeasured: see 4.4. |
 | **N-02 (P)** | A provider outage degrades audibly, never to silence | Speech falls back; the model does not |
 | **N-03 (P)** | Zero fabricated content reaching the record or the speaker | Guarded three ways; no ongoing measurement |
 | **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 27.0% / 91.1% specificity on a 473-utterance corpus; trend in `docs/net-history.jsonl` |

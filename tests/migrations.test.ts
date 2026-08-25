@@ -131,6 +131,7 @@ describe(
           "schema_migration",
           "session_key",
           "subject_state",
+          "turn_latency",
         ],
       );
 
