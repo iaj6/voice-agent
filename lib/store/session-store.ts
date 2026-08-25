@@ -280,6 +280,16 @@ class MemorySessionStore implements SessionStore {
   readonly kind = "memory" as const;
   private sessions = new Map<string, CheckInSession>();
 
+  /**
+   * Every session, oldest first. Read by the summary reader, which has no
+   * Postgres to query against when there is no DATABASE_URL.
+   */
+  __all(): CheckInSession[] {
+    return [...this.sessions.values()].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
+  }
+
   async create(): Promise<CheckInSession> {
     const session = blankSession(randomUUID());
     // Armed before the opening entry, exactly as the Postgres store does. A
