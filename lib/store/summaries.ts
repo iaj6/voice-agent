@@ -210,3 +210,77 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
     ? summaries
     : summaries.filter((c) => !beforeSyntheticFlag(c.createdAt));
 }
+
+
+/**
+ * Adverse events across calls, for reconciliation against another system.
+ *
+ * Coded term, grade, timestamp and subject id all sit outside the seal — the
+ * subject id is a plain column, and `sealRecord` seals only the verbatim halves
+ * — so a full reconciliation can be produced without fetching a key.
+ *
+ * `includeVerbatim` is the exception and is off by default. The participant's
+ * own words are the most useful thing a reviewer has when deciding whether two
+ * systems disagree or merely used different words, and they are also the reason
+ * a reconciliation CSV is a PHI document the moment it leaves the machine.
+ * Making that a deliberate flag rather than a default is the difference.
+ */
+export interface StoredEvent {
+  subjectId: string;
+  sessionId: string;
+  codedTerm: string;
+  verbatimTerm: string | null;
+  grade: number;
+  recordedAt: string;
+  spontaneous: boolean;
+}
+
+export async function listAdverseEvents(
+  query: SummaryQuery & { includeVerbatim?: boolean } = {},
+): Promise<StoredEvent[]> {
+  if (!isDatabaseConfigured()) {
+    const store = getSessionStore() as unknown as { __all?: () => unknown[] };
+    const all = (store.__all?.() ?? []) as Record<string, unknown>[];
+    return all.flatMap((session) => {
+      const subjectId = (session.subject as { subjectId?: string } | null)?.subjectId;
+      if (!subjectId) return [];
+      return ((session.adverseEvents as Record<string, unknown>[]) ?? []).map((e) => ({
+        subjectId,
+        sessionId: String(session.id),
+        codedTerm: String(e.codedTerm),
+        verbatimTerm: query.includeVerbatim ? String(e.verbatimTerm ?? "") : null,
+        grade: Number(e.grade),
+        recordedAt: String(e.recordedAt),
+        spontaneous: Boolean(e.spontaneous),
+      }));
+    });
+  }
+
+  const sql = getDb();
+  const rows = (await sql`
+    select id, subject_id, created_at, record -> 'adverseEvents' as events
+      from check_in_session
+     where subject_id is not null
+       and ${query.since ? sql`created_at >= ${query.since.toISOString()}` : sql`true`}
+       and ${query.includeSynthetic === true ? sql`true` : sql`coalesce((record ->> 'synthetic')::boolean, false) = false`}
+     order by created_at asc`) as Record<string, unknown>[];
+
+  return rows
+    .filter((r) => query.includeSynthetic === true || !beforeSyntheticFlag(
+      new Date(String(r.created_at)).toISOString(),
+    ))
+    .flatMap((r) =>
+      ((r.events as Record<string, unknown>[]) ?? []).map((e) => ({
+        subjectId: String(r.subject_id),
+        sessionId: String(r.id),
+        codedTerm: String(e.codedTerm),
+        // Sealed, so without a key this is an opaque blob rather than words.
+        // Left null unless a caller asked, and unsealing it is a separate step
+        // this reader deliberately does not perform.
+        verbatimTerm: null,
+        grade: Number(e.grade),
+        recordedAt: String(e.recordedAt),
+        spontaneous: Boolean(e.spontaneous),
+      })),
+    );
+}
