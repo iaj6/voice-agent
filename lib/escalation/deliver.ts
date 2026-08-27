@@ -53,17 +53,24 @@ export interface DeliveryOutcome {
  * carry a sentence the model wrote.
  */
 function safeSummary(session: CheckInSession, escalation: EscalationRecord): string {
-  if (escalation.category) {
-    return `Deterministic safety rule: ${escalation.category}.`;
-  }
-
+  // Named first, whoever raised it. A coordinator reading "Deterministic safety
+  // rule: Grade 3 or above" learns the rule and not the symptom, and the coded
+  // term is the whole of what they need to triage before opening the record.
+  // This regressed the moment grade and seriousness became deterministic, which
+  // gave them a category they had never had.
   const cited = escalation.relatedEventIds
     .map((id) => session.adverseEvents.find((e) => e.id === id))
     .filter((e): e is NonNullable<typeof e> => Boolean(e))
     .map((e) => `${e.codedTerm} (grade ${e.grade})`);
 
   if (cited.length > 0) {
-    return `Adverse event(s) requiring review: ${cited.join("; ")}.`;
+    return escalation.category
+      ? `${escalation.category}: ${cited.join("; ")}.`
+      : `Adverse event(s) requiring review: ${cited.join("; ")}.`;
+  }
+
+  if (escalation.category) {
+    return `Deterministic safety rule: ${escalation.category}.`;
   }
   return (
     "The check-in agent raised this for coordinator review. The details are in " +

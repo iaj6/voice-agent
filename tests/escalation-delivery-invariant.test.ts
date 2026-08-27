@@ -172,3 +172,131 @@ test("repeated fabrication pages somebody, not just the record", async () => {
   );
   __setDeliveryStore(null);
 });
+
+test("a grade 3 event pages somebody without the model choosing to", async () => {
+  // SPEC §7.1 names grade 3+ as a decision with a reporting clock that leaves the
+  // model. The entire mechanism used to be a sentence in the tool result telling
+  // the model to call escalate_to_coordinator. A grade 5 event recorded by a model
+  // that did not then call it raised nothing at all.
+  __setDeliveryStore(null);
+  const s = session(["My chest has been so tight I could not get up the stairs."]);
+
+  await executeTool(s, "record_adverse_event", {
+    verbatim_term: "so tight I could not get up the stairs",
+    coded_term: "Dyspnea",
+    onset_description: "three days",
+    ongoing: true,
+    grade: 3,
+    grade_rationale: "limits instrumental activities",
+    limits_self_care: false,
+    spontaneous: true,
+  });
+
+  const attempts = await getDeliveryStore().forSession(ID);
+  assert.equal(attempts.length, 1, "grade 3 paged nobody");
+  assert.equal(attempts[0].urgency, "urgent");
+  __setDeliveryStore(null);
+});
+
+test("grade 4 does not wait in an inbox", async () => {
+  __setDeliveryStore(null);
+  const s = session(["I could not breathe at all and they called an ambulance."]);
+  await executeTool(s, "record_adverse_event", {
+    verbatim_term: "could not breathe at all",
+    coded_term: "Respiratory failure",
+    onset_description: "last night",
+    ongoing: true,
+    grade: 4,
+    grade_rationale: "life-threatening",
+    limits_self_care: true,
+    spontaneous: true,
+  });
+  const attempts = await getDeliveryStore().forSession(ID);
+  assert.equal(attempts[0]?.urgency, "emergency");
+  __setDeliveryStore(null);
+});
+
+test("one event does not page a coordinator three times", async () => {
+  // The grade threshold and the seriousness determination can both fire for the
+  // same event, and a correction can re-record it. A coordinator paged three
+  // times for one symptom stops reading the pages.
+  __setDeliveryStore(null);
+  const s = session(["I was admitted overnight with the bleeding."]);
+
+  const first = await executeTool(s, "record_adverse_event", {
+    verbatim_term: "admitted overnight with the bleeding",
+    coded_term: "Hemorrhage",
+    onset_description: "yesterday",
+    ongoing: true,
+    grade: 3,
+    grade_rationale: "required hospitalisation",
+    limits_self_care: false,
+    spontaneous: true,
+  });
+  const eventId = (first.result as Record<string, unknown>).event_id as string;
+
+  await executeTool(s, "assess_seriousness", {
+    event_id: eventId,
+    criteria_met: ["hospitalization"],
+    basis: "admitted overnight",
+  });
+
+  // Re-recording the same event, as a correction would.
+  await executeTool(s, "record_adverse_event", {
+    verbatim_term: "admitted overnight with the bleeding",
+    coded_term: "Hemorrhage",
+    onset_description: "yesterday",
+    ongoing: true,
+    grade: 4,
+    grade_rationale: "corrected upward",
+    limits_self_care: true,
+    spontaneous: true,
+  });
+
+  const categories = s.escalations.map((e) => e.category);
+  assert.equal(
+    categories.filter((c) => c === "Grade 3 or above").length,
+    1,
+    "the grade threshold escalated twice for one event",
+  );
+  assert.equal(
+    categories.filter((c) => c === "Serious adverse event").length,
+    1,
+    "seriousness escalated more than once",
+  );
+  __setDeliveryStore(null);
+});
+
+test("a serious determination pages somebody on its own", async () => {
+  // An SAE opens a 24-hour reporting window under ICH E2A and 21 CFR 312.32. A
+  // window that opens only when a model remembers to call another tool is not a
+  // control.
+  __setDeliveryStore(null);
+  const s = session(["They kept me in overnight."]);
+  const rec = await executeTool(s, "record_adverse_event", {
+    verbatim_term: "kept me in overnight",
+    coded_term: "Neutropenia",
+    onset_description: "two days",
+    ongoing: true,
+    grade: 2,
+    grade_rationale: "moderate",
+    limits_self_care: false,
+    spontaneous: true,
+  });
+  assert.equal(
+    (await getDeliveryStore().forSession(ID)).length,
+    0,
+    "grade 2 should not escalate on grade alone",
+  );
+
+  await executeTool(s, "assess_seriousness", {
+    event_id: (rec.result as Record<string, unknown>).event_id as string,
+    criteria_met: ["hospitalization"],
+    basis: "inpatient admission",
+  });
+
+  const attempts = await getDeliveryStore().forSession(ID);
+  assert.equal(attempts.length, 1, "a serious grade 2 event paged nobody");
+  assert.equal(attempts[0].urgency, "urgent");
+  __setDeliveryStore(null);
+});

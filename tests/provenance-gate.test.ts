@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { executeTool } from "../lib/agent/tools.ts";
 import { AuditTrail } from "../lib/store/audit.ts";
 import { SUBJECTS } from "../lib/clinical/protocol.ts";
-import { getDeliveryStore } from "../lib/store/deliveries.ts";
+import { getDeliveryStore, __setDeliveryStore } from "../lib/store/deliveries.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
 /**
@@ -83,17 +83,25 @@ test("the refusal is recorded, not silent", async () => {
 
 test("a genuine capture passes the gate untouched", async () => {
   const session = sessionWith(SPOKEN);
-  const outcome = await executeTool(session, "record_adverse_event", {
+  await executeTool(session, "record_adverse_event", {
     ...FABRICATED_AE,
     verbatim_term: "very tired, couldn't shower Tuesday, daughter had to help",
     coded_term: "Fatigue",
     grade: 3,
   });
 
-  assert.notEqual(outcome.isError, true);
+  // isError no longer means "the gate rejected it". A grade 3 event now escalates
+  // deterministically, and in a test with no mail transport that page cannot be
+  // delivered, which is an error the model must see. What this test is about is
+  // the gate, so it asserts on the gate.
+  assert.equal(session.provenanceRejections, 0, "the gate must not have fired");
   assert.equal(session.adverseEvents.length, 1);
   assert.equal(session.adverseEvents[0].codedTerm, "Fatigue");
-  assert.equal(session.provenanceRejections, 0);
+  assert.equal(
+    session.adverseEvents[0].verbatimTerm,
+    "very tired, couldn't shower Tuesday, daughter had to help",
+    "the genuine quote survives the gate unchanged",
+  );
 });
 
 test("a doubtful quote never costs the structured data beside it", async () => {
@@ -101,6 +109,9 @@ test("a doubtful quote never costs the structured data beside it", async () => {
   // "yes" was discarded whenever the agent's paraphrase of it scored badly and
   // no coordinator was paged — silently undoing the correction-escalation fix.
   // The quote is the doubtful part; the answer is the part with a clock on it.
+  // Every session in this file shares one id, so deliveries accumulate across
+  // tests unless the store is reset.
+  __setDeliveryStore(null);
   const session = sessionWith([
     "Yeah, my temperature was up around 103 on Sunday",
   ]);

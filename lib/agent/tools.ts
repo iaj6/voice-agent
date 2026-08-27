@@ -331,6 +331,48 @@ type Handler = (
  */
 const PROVENANCE_ESCALATION_THRESHOLD = 3;
 
+
+/**
+ * Raises and delivers an escalation for an adverse event, once.
+ *
+ * Idempotent per event and category, because both the grade threshold and the
+ * seriousness determination can fire for the same event — and a correction can
+ * re-record it — and a coordinator paged three times for one symptom stops
+ * reading the pages.
+ */
+async function escalateForEvent(
+  session: CheckInSession,
+  event: { id: string; codedTerm: string },
+  urgency: EscalationUrgency,
+  reason: string,
+  category: string,
+): Promise<Awaited<ReturnType<typeof raiseEscalation>> | null> {
+  const already = session.escalations.some(
+    (e) => e.category === category && e.relatedEventIds.includes(event.id),
+  );
+  if (already) return null;
+
+  return raiseEscalation(
+    session,
+    {
+      id: nextEscalationId(session),
+      urgency,
+      reason,
+      relatedEventIds: [event.id],
+      triggeredBy: "safety_net",
+      category,
+      createdAt: new Date().toISOString(),
+      sponsorNotificationDeadline:
+        urgency === "routine"
+          ? null
+          : new Date(
+              Date.now() + PROTOCOL.saeReportingWindowHours * 3600 * 1000,
+            ).toISOString(),
+    },
+    { actor: "safety_net", auditReason: reason },
+  );
+}
+
 async function screenQuote(
   session: CheckInSession,
   field: string,
@@ -1075,23 +1117,55 @@ const handlers: Record<string, Handler> = {
     // the majority. See lib/agent/runner.ts.
 
     const needsEscalation = grade >= ESCALATION_GRADE_THRESHOLD;
+
+    // Deterministic, not advisory.
+    //
+    // SPEC §7.1 says "anything with a reporting clock attached is decided by a
+    // deterministic control". Grade 3+ is one of the two things it names, and
+    // until now the entire mechanism was the sentence below telling the model to
+    // call escalate_to_coordinator. A grade 5 event recorded by a model that did
+    // not then call it raised nothing at all.
+    const delivery = needsEscalation
+      ? await escalateForEvent(
+          session,
+          record,
+          // Grade 4 is life-threatening and grade 5 is a death; neither waits for
+          // an inbox. Grade 3 is severe and reportable but not immediately so.
+          // Worth a clinician's eye — an engineer picked this split (7.10).
+          grade >= 4 ? "emergency" : "urgent",
+          `CTCAE grade ${grade} (${CTCAE_GRADES[grade].label}) recorded for ` +
+            `"${record.codedTerm}". Deterministic, independent of model judgment.`,
+          "Grade 3 or above",
+        )
+      : null;
+
+    const paged = delivery?.delivered === true;
+
     return {
       result: {
         event_id: record.id,
         recorded: true,
         was_correction: Boolean(existing),
         grade_label: CTCAE_GRADES[grade].label,
+        escalated: needsEscalation ? Boolean(delivery) : false,
+        delivered: needsEscalation ? paged : null,
         instruction: needsEscalation
-          ? `Grade ${grade} meets the escalation threshold. Call ` +
-            "escalate_to_coordinator now, before continuing the review, and call " +
-            "assess_seriousness for this event."
+          ? paged
+            ? `Grade ${grade} meets the escalation threshold and the coordinator ` +
+              "has already been paged for it — do not call escalate_to_coordinator " +
+              "for this event. Call assess_seriousness for it now."
+            : `Grade ${grade} meets the escalation threshold and the page did NOT ` +
+              "go through. Do not tell the subject anyone has been notified. Call " +
+              "assess_seriousness for this event, then tell them to contact their " +
+              "study site directly today."
           : "Recorded. Continue the review. Do not tell the subject the grade — " +
             "grades are for the coordinator, not the subject.",
       },
+      isError: needsEscalation && !paged,
     };
   },
 
-  assess_seriousness(session, input) {
+  async assess_seriousness(session, input) {
     const eventId = String(input.event_id ?? "");
     const event = session.adverseEvents.find((e) => e.id === eventId);
     if (!event) {
@@ -1141,6 +1215,27 @@ const handlers: Record<string, Handler> = {
       Date.now() + PROTOCOL.saeReportingWindowHours * 3600 * 1000,
     ).toISOString();
 
+    // The other decision SPEC §7.1 names as having a clock, and the other one
+    // that was an instruction string. An SAE starts a 24-hour reporting window
+    // under ICH E2A and 21 CFR 312.32; a window that opens only when a model
+    // remembers to call another tool is not a control.
+    //
+    // Death and life-threatening are the criteria that do not wait for an inbox.
+    const immediate =
+      determination.criteria.includes("death") ||
+      determination.criteria.includes("life_threatening");
+    const delivery = await escalateForEvent(
+      session,
+      event,
+      immediate ? "emergency" : "urgent",
+      `Serious adverse event determined for "${event.codedTerm}": ` +
+        `${determination.criteria.map((c) => SAE_CRITERIA[c].label).join(", ")}. ` +
+        `Sponsor notification due within ${determination.sponsorNotificationHours}h. ` +
+        "Deterministic, independent of model judgment.",
+      "Serious adverse event",
+    );
+    const paged = delivery?.delivered === true;
+
     return {
       result: {
         event_id: eventId,
@@ -1149,12 +1244,19 @@ const handlers: Record<string, Handler> = {
         sponsor_notification_deadline: deadline,
         sponsor_notification_hours: determination.sponsorNotificationHours,
         ind_safety_report_note: determination.indSafetyReportNote,
-        instruction:
-          "This is a serious adverse event. Call escalate_to_coordinator with " +
-          "urgency 'urgent' or 'emergency' immediately. Do not tell the subject the " +
-          "words 'serious adverse event' — say you are getting their coordinator " +
-          "involved right away.",
+        escalated: Boolean(delivery),
+        delivered: delivery ? paged : null,
+        instruction: paged || delivery === null
+          ? "This is a serious adverse event and the coordinator has already been " +
+            "paged for it — do not call escalate_to_coordinator for this event. Do " +
+            "not tell the subject the words 'serious adverse event'; say you are " +
+            "getting their coordinator involved right away."
+          : "This is a serious adverse event and the page did NOT go through. Do " +
+            "not tell the subject anyone has been notified — tell them to contact " +
+            "their study site directly today, and do not use the words 'serious " +
+            "adverse event'.",
       },
+      isError: Boolean(delivery) && !paged,
     };
   },
 
