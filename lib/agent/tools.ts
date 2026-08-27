@@ -792,6 +792,25 @@ const handlers: Record<string, Handler> = {
 
     const subject = findSubject(subjectId, dob);
     if (!subject) {
+      // Bind the key to the offered id even though verification failed.
+      //
+      // By this point the caller has spoken a date of birth aloud, and it is in
+      // `subjectUtterances`, sealed with this session's key. `shredSubject` finds
+      // keys by subject id — so an unbound session is one an erasure request can
+      // never reach, and the most identifying sentence in the call sits there
+      // permanently.
+      //
+      // The trade is real and it goes the other way: the id is *claimed*, not
+      // verified, so a caller who misspoke their id files this session under
+      // somebody else. The audit entry below records the id as offered rather
+      // than confirmed, and the realistic case by far is a genuine participant
+      // whose date of birth was misheard over a phone line. An erasure that
+      // cannot reach a spoken date of birth is the worse failure.
+      if (subjectId) {
+        await getKeyStore().bindSubject(session.id, subjectId).catch(() => {
+          /* an unbindable key must not stop the call from failing verification */
+        });
+      }
       session.audit.record({
         actor: "system",
         action: "VERIFICATION_FAILED",

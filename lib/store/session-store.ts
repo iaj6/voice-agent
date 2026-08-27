@@ -14,6 +14,27 @@ import type { CheckInSession } from "./session.ts";
  * speed — it is that a process restart mid-call currently loses a reported
  * adverse event, which is unacceptable rather than inconvenient.
  */
+/**
+ * Two writers minted the same audit sequence number for different actions.
+ *
+ * Raised rather than swallowed, because the alternative is a record of what the
+ * system did with a hole in it that nothing reports.
+ */
+export class AuditDivergenceError extends Error {
+  readonly sessionId: string;
+  readonly seq: number;
+  constructor(sessionId: string, seq: number) {
+    super(
+      `Audit entry ${seq} for session ${sessionId} already exists with different ` +
+        "content. Two writers diverged and one entry would have been lost, so " +
+        "nothing was written. Reload the session and retry the action.",
+    );
+    this.name = "AuditDivergenceError";
+    this.sessionId = sessionId;
+    this.seq = seq;
+  }
+}
+
 export interface SessionStore {
   readonly kind: "memory" | "postgres";
   create(): Promise<CheckInSession>;
@@ -744,14 +765,41 @@ class PostgresSessionStore implements SessionStore {
        where id = ${id} and completed_at is null`;
   }
 
-  /** Inserts only entries not already persisted. The table rejects rewrites. */
+  /**
+   * Inserts only entries not already persisted. The table rejects rewrites.
+   *
+   * The filter used to be `seq > high` and nothing else, which silently dropped
+   * any entry whose sequence number was already taken. Two writers each hold
+   * their own in-memory `AuditTrail`, with its own counter and its own hash
+   * chain — the escalation sweeper loading a session while a call is live is the
+   * ordinary case — so both can independently mint "entry 6". The first wins and
+   * the second vanishes, with no error anywhere.
+   *
+   * A lost audit entry is the failure an audit trail exists to prevent, and
+   * 21 CFR 11.10(e) asks for a record of operator actions that does not obscure
+   * previously recorded information. Losing one silently obscures it entirely.
+   * So divergence throws: an error is recoverable, a hole is not.
+   */
   async appendAudit(session: CheckInSession): Promise<void> {
     const sql = getDb();
-    const [{ high }] = (await sql`
-      select coalesce(max(seq), 0) as high from audit_entry
-      where session_id = ${session.id}`) as { high: number }[];
+    const stored = (await sql`
+      select seq, hash from audit_entry where session_id = ${session.id}
+      order by seq asc`) as { seq: number; hash: string }[];
 
-    const pending = session.audit.all().filter((e) => e.seq > Number(high));
+    const high = stored.length === 0 ? 0 : Number(stored[stored.length - 1].seq);
+    const bySeq = new Map(stored.map((r) => [Number(r.seq), r.hash]));
+    const mine = session.audit.all();
+
+    // Same sequence number, different content: two trails diverged and one of
+    // them is about to disappear.
+    for (const entry of mine) {
+      const persisted = bySeq.get(entry.seq);
+      if (persisted !== undefined && persisted !== entry.hash) {
+        throw new AuditDivergenceError(session.id, entry.seq);
+      }
+    }
+
+    const pending = mine.filter((e) => e.seq > high);
     if (pending.length === 0) return;
 
     await sql.transaction(

@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { neon } from "@neondatabase/serverless";
+import { getKeyStore } from "../lib/store/keys.ts";
 
 for (const file of [".env", ".env.local"]) {
   try {
@@ -95,14 +96,20 @@ if (!confirm) {
   process.exit(0);
 }
 
-const destroyed = await sql`
-  update session_key
-     set key = null, destroyed_at = now(), destroyed_reason = ${reason}
-   where subject_id = ${subject} and key is not null
-  returning session_id`;
+// Calls the store rather than reimplementing it.
+//
+// This script used to run its own UPDATE against session_key, which destroyed
+// the keys and skipped the second half of shredSubject: nulling
+// escalation_delivery.subject_id. That table carries the subject id in the clear
+// by necessity — the alarm query needs it — so the only shipped destruction tool
+// left "that subject had an emergency escalation on that date" behind, while
+// printing that their content was unrecoverable. The tested path and the
+// production path were different code, and only one of them was right.
+const destroyed = await getKeyStore().shredSubject(subject, reason);
 
-console.log(`\n  ${C.good(`${destroyed.length} key(s) destroyed.`)}`);
+console.log(`\n  ${C.good(`${destroyed} key(s) destroyed.`)}`);
 console.log(
   `  ${C.dim("The records and their audit trails remain and still verify;")}\n` +
-    `  ${C.dim("their content is unrecoverable.")}\n`,
+    `  ${C.dim("their content is unrecoverable, and the subject id is cleared")}\n` +
+    `  ${C.dim("from escalation delivery rows. Residual traces: docs/RETENTION.md D4.")}\n`,
 );

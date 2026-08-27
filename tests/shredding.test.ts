@@ -16,6 +16,7 @@ import { __setSessionStore, getSessionStore } from "../lib/store/session-store.t
 import { __setKeyStore, getKeyStore } from "../lib/store/keys.ts";
 import { executeTool } from "../lib/agent/tools.ts";
 import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/scratch-db.ts";
+import { getDeliveryStore } from "../lib/store/deliveries.ts";
 
 const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
 const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
@@ -163,6 +164,112 @@ describe(
           `"${phrase}" survived the shred in the clear`,
         );
       }
+    });
+
+    test("a spoken date of birth is reachable by erasure even when verification failed", async () => {
+      // The caller says their date of birth aloud before anyone knows whether it
+      // matches. On a failure the key was never bound to a subject, and
+      // shredSubject finds keys *by* subject id — so the most identifying
+      // sentence in the call sat in a session no erasure request could reach.
+      const store = getSessionStore();
+      const session = await store.create();
+      session.subjectUtterances = ["It's 001-0042.", "March the eleventh, 1958."];
+      await executeTool(session, "verify_subject", {
+        subject_id: VERIFY.subject_id,
+        date_of_birth: "1958-03-12", // one digit out, as a mishearing would be
+      });
+      await store.save(session);
+
+      const destroyed = await getKeyStore().shredSubject(
+        VERIFY.subject_id,
+        "Erasure requested.",
+      );
+      assert.ok(destroyed > 0, "the failed session's key was unreachable by erasure");
+
+      const reloaded = (await store.get(session.id))!;
+      assert.equal(reloaded.shredded, true);
+      assert.ok(
+        !JSON.stringify(reloaded.subjectUtterances).includes("1958"),
+        "the spoken date of birth survived",
+      );
+    });
+
+    test("shredding clears the subject id from delivery rows too", async () => {
+      // escalation_delivery carries subject_id in the clear by necessity — the
+      // alarm query needs it — so shredding has to reach it explicitly, or
+      // "that subject had an emergency escalation on that date" survives an
+      // erasure request. shredSubject does this; the only shipped destruction
+      // *tool* ran its own UPDATE and skipped it, while printing that the
+      // content was unrecoverable.
+      const session = await completedCall();
+      await getDeliveryStore().queue(
+        {
+          sessionId: session.id,
+          escalationId: "ESC-001",
+          subjectId: VERIFY.subject_id,
+          urgency: "emergency",
+          channel: "test",
+          destination: "coordinator@example.test",
+          attempt: 1,
+          tier: "primary",
+          deadlineAt: new Date(),
+        },
+        "tok-shred-test",
+      );
+
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Erasure requested.");
+
+      const rows = await raw!.query(
+        `select coalesce(string_agg(coalesce(subject_id, ''), ' '), '') as ids
+           from escalation_delivery where session_id = $1`,
+        [session.id],
+      );
+      assert.ok(
+        !rows[0].ids.includes(VERIFY.subject_id),
+        "the subject id survived the shred in escalation_delivery",
+      );
+    });
+
+    test("two writers cannot silently lose an audit entry", async () => {
+      // The escalation sweeper loading a session while a call is live is the
+      // ordinary case, and each holds its own in-memory trail with its own
+      // counter and hash chain. Both can mint "entry N"; the filter was
+      // `seq > high`, so the second vanished with no error anywhere — a hole in
+      // the record of what the system did, which is the one thing an audit trail
+      // exists to prevent.
+      const store = getSessionStore();
+      const live = await store.create();
+      await store.save(live);
+
+      // A second reader of the same session, as the sweeper would be.
+      const sweeper = (await store.get(live.id))!;
+
+      live.audit.record({
+        actor: "agent",
+        action: "AE_RECORDED",
+        entity: "AdverseEvent",
+        entityId: "AE-1",
+        reason: "written by the live call",
+      });
+      await store.save(live);
+
+      sweeper.audit.record({
+        actor: "safety_net",
+        action: "ESCALATED",
+        entity: "Escalation",
+        entityId: "ESC-1",
+        reason: "written by the sweeper, at the same sequence number",
+      });
+
+      await assert.rejects(
+        () => store.appendAudit(sweeper),
+        /already exists with different content/,
+        "the second writer's entry was dropped silently",
+      );
+
+      // And nothing was half-written: the stored trail still verifies.
+      const reloaded = (await store.get(live.id))!;
+      assert.equal(reloaded.audit.verifyChain().valid, true);
     });
 
     test("a sealed record reads back exactly as it was written", async () => {
