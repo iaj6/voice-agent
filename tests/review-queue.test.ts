@@ -20,6 +20,7 @@ function call(overrides: Partial<CallSummary> = {}): CallSummary {
     escalations: [],
     screenAnswered: SCREEN_ITEM_COUNT,
     screenPositive: 0,
+    childbearingPotential: true,
     provenanceRejections: 0,
     dosesMissed: null,
     ...overrides,
@@ -150,4 +151,21 @@ test("a call carries every reason it has, not just the worst", () => {
   assert.ok(kinds.includes("high_grade_event"));
   assert.ok(kinds.includes("provenance_rejection"));
   assert.ok(kinds.includes("incomplete_screen"));
+});
+
+test("a participant the pregnancy item does not apply to has a complete screen at 8", () => {
+  // Three of the four roster subjects are not of childbearing potential, so the
+  // agent legitimately answers 8 of 9 and the tool says "Screen complete". A
+  // hard-coded 9 put a permanent PARTIAL SCREEN badge on every clean call for the
+  // majority of the queue — which teaches a coordinator to dismiss the badge, on
+  // exactly the reason it exists to surface.
+  const notApplicable = reasonsFor(
+    call({ childbearingPotential: false, screenAnswered: 8 }),
+  );
+  assert.ok(!notApplicable.some((r) => r.kind === "incomplete_screen"));
+
+  // And for someone it does apply to, 8 of 9 is genuinely incomplete.
+  const applicable = reasonsFor(call({ childbearingPotential: true, screenAnswered: 8 }));
+  assert.ok(applicable.some((r) => r.kind === "incomplete_screen"));
+  assert.match(applicable.find((r) => r.kind === "incomplete_screen")!.detail, /8 of 9/);
 });

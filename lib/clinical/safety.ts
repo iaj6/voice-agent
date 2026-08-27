@@ -342,7 +342,7 @@ const NET_RULES: NetRule[] = [
   },
 ];
 
-const URGENCY_RANK: Record<EscalationUrgency, number> = {
+export const URGENCY_RANK: Record<EscalationUrgency, number> = {
   routine: 0,
   urgent: 1,
   emergency: 2,

@@ -15,6 +15,7 @@
  */
 
 import type { CtcaeGrade, EscalationUrgency } from "../clinical/safety.ts";
+import { SUBJECTS } from "../clinical/protocol.ts";
 import { getDb, isDatabaseConfigured } from "./db.ts";
 import { getSessionStore } from "./session-store.ts";
 import type { CheckInSession, SessionStatus } from "./session.ts";
@@ -54,6 +55,12 @@ export interface CallSummary {
   /** Screen items actually answered, and how many came back positive. */
   screenAnswered: number;
   screenPositive: number;
+  /**
+   * Whether the pregnancy screen item applied to this participant.
+   *
+   * Null when the call never verified, and therefore never knew.
+   */
+  childbearingPotential: boolean | null;
   /** Distinct verbatim quotes the provenance gate refused. */
   provenanceRejections: number;
   dosesMissed: number | null;
@@ -97,6 +104,7 @@ function summarise(row: {
   status: string;
   record: Record<string, unknown>;
   subjectPresent: boolean;
+  childbearingPotential: boolean | null;
   provenanceRejections: number;
   synthetic: boolean;
 }): CallSummary {
@@ -138,6 +146,7 @@ function summarise(row: {
     // and counting it as complete is the thing the per-item design exists to stop.
     screenAnswered: (screen?.items ?? []).filter((i) => i.answer !== null).length,
     screenPositive: (screen?.positiveRedFlags ?? []).length,
+    childbearingPotential: row.childbearingPotential,
     provenanceRejections: row.provenanceRejections,
     dosesMissed:
       typeof adherence?.dosesMissedSinceLastCheckIn === "number"
@@ -161,6 +170,7 @@ export function summariseSession(session: CheckInSession): CallSummary {
     status: session.status,
     record: session as unknown as Record<string, unknown>,
     subjectPresent: Boolean(session.subject),
+    childbearingPotential: session.subject?.childbearingPotential ?? null,
     provenanceRejections: Number(session.provenanceRejections ?? 0),
     synthetic: Boolean(session.synthetic),
   });
@@ -189,6 +199,9 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
           status: String(session.status),
           record: session,
           subjectPresent: Boolean(session.subject),
+          childbearingPotential:
+            (session.subject as { childbearingPotential?: boolean } | null)
+              ?.childbearingPotential ?? null,
           provenanceRejections: Number(session.provenanceRejections ?? 0),
           synthetic: Boolean(session.synthetic),
         });
@@ -202,7 +215,7 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
   // `record` carries the sealed fields too, but nothing here reads them and no
   // key is ever fetched, so they stay opaque blobs for the life of the call.
   const rows = (await sql`
-    select id, created_at, completed_at, status, record,
+    select id, created_at, completed_at, status, record, subject_id,
            (record -> 'subject') is not null and record -> 'subject' <> 'null'::jsonb
              as subject_present,
            coalesce((record ->> 'synthetic')::boolean, false) as synthetic
@@ -221,6 +234,13 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
       status: String(r.status),
       record,
       subjectPresent: Boolean(r.subject_present),
+      // The subject object is sealed, but `subject_id` is a plain column and the
+      // roster is static protocol data — so applicability is recoverable without
+      // a key, which is what keeps this reader key-free.
+      childbearingPotential: r.subject_id
+        ? (SUBJECTS.find((x) => x.subjectId === String(r.subject_id))
+            ?.childbearingPotential ?? null)
+        : null,
       provenanceRejections: Number(record.provenanceRejections ?? 0),
       synthetic: Boolean(r.synthetic),
     });

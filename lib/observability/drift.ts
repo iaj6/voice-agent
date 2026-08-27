@@ -92,7 +92,10 @@ export function summariseWindow(week: string, calls: CallSummary[]): DriftWindow
     spontaneousShare: events.length
       ? events.filter((e) => e.spontaneous).length / events.length
       : null,
-    escalationsPerCall: completed.length ? escalations.length / completed.length : null,
+    // Over every call, not only completed ones. The numerator counted
+    // escalations from dropped calls too, and an emergency ends a call early —
+    // so the rate rose with the drop rate rather than with the instrument.
+    escalationsPerCall: calls.length ? escalations.length / calls.length : null,
     escalationsByUrgency,
     bySafetyNet: escalations.filter((e) => e.triggeredBy === "safety_net").length,
     byAgent: escalations.filter((e) => e.triggeredBy === "agent").length,

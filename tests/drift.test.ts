@@ -28,6 +28,7 @@ function call(overrides: Partial<CallSummary> = {}): CallSummary {
     escalations: [],
     screenAnswered: 9,
     screenPositive: 0,
+    childbearingPotential: true,
     provenanceRejections: 0,
     dosesMissed: null,
     ...overrides,

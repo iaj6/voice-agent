@@ -98,7 +98,13 @@ export function ReviewQueue() {
             e.preventDefault();
             // Session cookie, not persistent: a review token left on disk on a
             // shared clinic machine is the same disclosure by a slower route.
-            document.cookie = `voice_agent_review=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
+            // Secure, because this cookie is the bearer credential for the whole
+            // PHI surface and SameSite does nothing to stop it crossing a
+            // plaintext hop — an internal clinic deployment on http:// is the
+            // realistic case. It is a no-op on localhost in current browsers.
+            document.cookie =
+              `voice_agent_review=${encodeURIComponent(token)}; path=/; ` +
+              `SameSite=Strict; Secure`;
             setToken("");
             setAttempt((n) => n + 1);
           }}

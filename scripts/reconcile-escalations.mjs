@@ -111,8 +111,10 @@ console.log(
 for (const [key, n] of [...byCategory].sort((a, b) => b[1] - a[1])) {
   console.log(`    ${String(n).padStart(4)}  ${key}`);
 }
-console.log(C.dim(`\n  Oldest first, the five most recent:`));
-for (const r of undelivered.slice(0, 5)) {
+// Oldest first: for a backlog, the one that has gone unpaged longest is the one
+// that matters. The query orders newest-first for the summary above.
+console.log(C.dim(`\n  The five that have gone unpaged longest:`));
+for (const r of undelivered.slice(-5).reverse()) {
   console.log(
     C.dim(
       `    ${r.created_at.toISOString?.().slice(0, 19) ?? String(r.created_at).slice(0, 19)}  ` +

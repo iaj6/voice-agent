@@ -4,6 +4,7 @@ import { emergencyPhrase, speakingRegion } from "../clinical/locale.ts";
 import {
   CTCAE_GRADES,
   ESCALATION_GRADE_THRESHOLD,
+  URGENCY_RANK,
   SAE_CRITERIA,
   determineSeriousness,
   type CtcaeGrade,
@@ -335,10 +336,22 @@ const PROVENANCE_ESCALATION_THRESHOLD = 3;
 /**
  * Raises and delivers an escalation for an adverse event, once.
  *
- * Idempotent per event and category, because both the grade threshold and the
- * seriousness determination can fire for the same event — and a correction can
- * re-record it — and a coordinator paged three times for one symptom stops
+ * Idempotent per event and category, because the grade threshold and the
+ * seriousness determination can both fire for the same event — and a correction
+ * can re-record it — and a coordinator paged three times for one symptom stops
  * reading the pages.
+ *
+ * **Returns the delivery status either way.** The first version returned null on
+ * the skip, and every caller read null as "not delivered": correcting a grade 3
+ * event told the model the page had failed and to stop the participant relying on
+ * it, when the coordinator had in fact been paged minutes earlier. That is the
+ * same class of untruth this whole sprint exists to remove, reintroduced by the
+ * fix for it. "Already raised" and "nobody was reached" are different facts and
+ * nothing may collapse them.
+ *
+ * An escalation is re-raised when the urgency goes *up*. A correction from grade
+ * 3 to grade 4 is a life-threatening event whose only page is sitting at urgent;
+ * the deduplication must not hold a participant at the lower tier.
  */
 async function escalateForEvent(
   session: CheckInSession,
@@ -346,13 +359,28 @@ async function escalateForEvent(
   urgency: EscalationUrgency,
   reason: string,
   category: string,
-): Promise<Awaited<ReturnType<typeof raiseEscalation>> | null> {
-  const already = session.escalations.some(
+): Promise<{ raised: boolean; delivered: boolean; detail: string | null }> {
+  const prior = session.escalations.find(
     (e) => e.category === category && e.relatedEventIds.includes(event.id),
   );
-  if (already) return null;
 
-  return raiseEscalation(
+  if (prior && URGENCY_RANK[urgency] <= URGENCY_RANK[prior.urgency]) {
+    // Already covered at this tier or higher. Report what actually happened to
+    // that page rather than assuming either outcome.
+    const attempts = await getDeliveryStore().forSession(session.id);
+    const delivered = attempts.some(
+      (d) =>
+        d.escalationId === prior.id &&
+        (d.status === "sent" || d.status === "acknowledged" || d.status === "suppressed"),
+    );
+    return {
+      raised: false,
+      delivered,
+      detail: delivered ? null : "an earlier page for this event did not go through",
+    };
+  }
+
+  const outcome = await raiseEscalation(
     session,
     {
       id: nextEscalationId(session),
@@ -371,6 +399,7 @@ async function escalateForEvent(
     },
     { actor: "safety_net", auditReason: reason },
   );
+  return { raised: true, delivered: outcome.delivered, detail: outcome.detail ?? null };
 }
 
 async function screenQuote(
@@ -978,7 +1007,26 @@ const handlers: Record<string, Handler> = {
     // Only ever claimed when a delivery actually succeeded. The agent reads this
     // and says it out loud to a frightened person, so "the coordinator has been
     // paged" has to be a fact this tool observed rather than one it assumed.
-    const paged = delivery?.delivered === true;
+    // Three states, not two. A red-flag item re-answered "yes" raises nothing,
+    // because it was already positive — and reading that as "not delivered" told
+    // an emergency-tier participant nobody had been alerted when somebody had.
+    //
+    // Checked, not assumed: the earlier page may itself have failed, and assuming
+    // it succeeded is the same untruth in the other direction.
+    let paged = delivery?.delivered === true;
+    if (isRedFlag && !raised) {
+      const prior = session.escalations.find((e) => e.category === item.label);
+      if (prior) {
+        const attempts = await getDeliveryStore().forSession(session.id);
+        paged = attempts.some(
+          (d) =>
+            d.escalationId === prior.id &&
+            (d.status === "sent" ||
+              d.status === "acknowledged" ||
+              d.status === "suppressed"),
+        );
+      }
+    }
     const coordinator = session.subject.coordinatorName;
     // Same reasoning as escalate_to_coordinator: telling someone in Manchester to
     // call 911 costs them the seconds that matter most.
@@ -993,7 +1041,11 @@ const handlers: Record<string, Handler> = {
         recorded: true,
         item: item.label,
         escalation_raised: raised,
-        delivered: raised ? paged : null,
+        // Reported for any red flag, not only a newly raised one. Keying this on
+        // `raised` returned null when the item was answered yes a second time —
+        // an escalation covering it exists and the model could not tell whether
+        // anyone had been reached.
+        delivered: isRedFlag ? paged : null,
         notified: paged ? coordinator : null,
         delivery_error: delivery?.detail ?? null,
         acknowledge_by: delivery?.delivery?.deadlineAt ?? null,
@@ -1024,7 +1076,9 @@ const handlers: Record<string, Handler> = {
       },
       // An escalation nobody received is an error condition, and the model should
       // see it as one rather than as a successful call.
-      isError: Boolean(raised) && !paged,
+      // An escalation nobody received is an error condition — including one
+      // raised on an earlier turn whose page never landed.
+      isError: isRedFlag && !paged,
     };
   },
 
@@ -1147,7 +1201,7 @@ const handlers: Record<string, Handler> = {
         recorded: true,
         was_correction: Boolean(existing),
         grade_label: CTCAE_GRADES[grade].label,
-        escalated: needsEscalation ? Boolean(delivery) : false,
+        escalated: needsEscalation,
         delivered: needsEscalation ? paged : null,
         instruction: needsEscalation
           ? paged
@@ -1234,7 +1288,7 @@ const handlers: Record<string, Handler> = {
         "Deterministic, independent of model judgment.",
       "Serious adverse event",
     );
-    const paged = delivery?.delivered === true;
+    const paged = delivery.delivered;
 
     return {
       result: {
@@ -1244,9 +1298,9 @@ const handlers: Record<string, Handler> = {
         sponsor_notification_deadline: deadline,
         sponsor_notification_hours: determination.sponsorNotificationHours,
         ind_safety_report_note: determination.indSafetyReportNote,
-        escalated: Boolean(delivery),
-        delivered: delivery ? paged : null,
-        instruction: paged || delivery === null
+        escalated: true,
+        delivered: paged,
+        instruction: paged
           ? "This is a serious adverse event and the coordinator has already been " +
             "paged for it — do not call escalate_to_coordinator for this event. Do " +
             "not tell the subject the words 'serious adverse event'; say you are " +
@@ -1256,7 +1310,7 @@ const handlers: Record<string, Handler> = {
             "their study site directly today, and do not use the words 'serious " +
             "adverse event'.",
       },
-      isError: Boolean(delivery) && !paged,
+      isError: !paged,
     };
   },
 

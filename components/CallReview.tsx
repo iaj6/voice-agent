@@ -61,12 +61,58 @@ export function CallReview({ id }: { id: string }) {
   const [data, setData] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [needsToken, setNeedsToken] = useState(false);
+
   useEffect(() => {
+    let current = true;
     fetch(`/api/review/${id}`)
-      .then((r) => r.json())
-      .then((d) => (d.error ? Promise.reject(new Error(d.error)) : setData(d)))
-      .catch((e) => setError(String(e.message ?? e)));
+      .then(async (r) => {
+        const d = await r.json();
+        if (!current) return;
+        // A coordinator following a deep link in a fresh browser landed on
+        // "Not authorised" with no way to authenticate, and had to know to visit
+        // /review first. The queue offered the form; this page did not.
+        if (r.status === 401) {
+          setNeedsToken(true);
+          return;
+        }
+        if (d.error) throw new Error(d.error);
+        setData(d);
+      })
+      .catch((e) => {
+        if (current) setError(String(e.message ?? e));
+      });
+    return () => {
+      current = false;
+    };
   }, [id]);
+
+  if (needsToken) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ background: "var(--color-ink-000)" }}
+      >
+        <div
+          className="flex w-80 flex-col gap-3 border p-5"
+          style={{ borderColor: "var(--color-line)" }}
+        >
+          <span className="stamp stamp-lit">Review access</span>
+          <p className="text-[11px] leading-relaxed" style={{ color: "var(--color-bone-faint)" }}>
+            This call cannot be opened without the review secret. Unlock the queue
+            first and this link will work.
+          </p>
+          <Link
+            href="/review"
+            className="border px-2 py-1.5 text-center text-[11px]"
+            style={{ borderColor: "var(--color-line-lit)", color: "var(--color-bone)" }}
+          >
+            Go to the review queue
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (

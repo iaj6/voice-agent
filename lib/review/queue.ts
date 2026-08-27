@@ -12,6 +12,7 @@
  * ranking nobody trusts.
  */
 
+import { PROTOCOL } from "../clinical/protocol.ts";
 import type { CallSummary } from "../store/summaries.ts";
 
 export type ReviewReasonKind =
@@ -54,8 +55,25 @@ const PRECEDENCE: ReviewReasonKind[] = [
 /** CTCAE 3 and above is the threshold the protocol escalates on. */
 const HIGH_GRADE = 3;
 
-/** A completed screen is every item the protocol defines. */
-export const SCREEN_ITEM_COUNT = 9;
+/**
+ * How many screen items this participant should have been asked.
+ *
+ * Not a constant. The pregnancy item applies only to participants of childbearing
+ * potential — the tool filters on it and the prompt tells the agent to skip it —
+ * so three of the four roster subjects legitimately answer 8 of 9 and the tool
+ * says "Screen complete". A hard-coded 9 put a permanent PARTIAL SCREEN badge on
+ * every clean call for the majority of the queue, which is exactly the
+ * "teaches a coordinator to dismiss this reason" failure the emergency carve-out
+ * below was written to avoid.
+ */
+export function screenItemsFor(childbearingPotential: boolean | null): number {
+  return PROTOCOL.safetyScreen.filter(
+    (i) => i.appliesTo !== "childbearing_potential" || childbearingPotential === true,
+  ).length;
+}
+
+/** Every item the protocol defines, for a participant they all apply to. */
+export const SCREEN_ITEM_COUNT = PROTOCOL.safetyScreen.length;
 
 export interface ReviewItem {
   call: CallSummary;
@@ -125,15 +143,16 @@ export function reasonsFor(call: CallSummary): ReviewReason[] {
   // rule being followed, and flagging it would teach a coordinator to dismiss
   // this reason.
   const abandonedForEmergency = call.escalations.some((e) => e.urgency === "emergency");
+  const expected = screenItemsFor(call.childbearingPotential);
   if (
     call.verified &&
     call.completedAt !== null &&
-    call.screenAnswered < SCREEN_ITEM_COUNT &&
+    call.screenAnswered < expected &&
     !abandonedForEmergency
   ) {
     reasons.push({
       kind: "incomplete_screen",
-      detail: `${call.screenAnswered} of ${SCREEN_ITEM_COUNT} screen items answered`,
+      detail: `${call.screenAnswered} of ${expected} screen items answered`,
     });
   }
 

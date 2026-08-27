@@ -216,14 +216,12 @@ test("grade 4 does not wait in an inbox", async () => {
   __setDeliveryStore(null);
 });
 
-test("one event does not page a coordinator three times", async () => {
-  // The grade threshold and the seriousness determination can both fire for the
-  // same event, and a correction can re-record it. A coordinator paged three
-  // times for one symptom stops reading the pages.
+test("re-recording an event at the same grade does not page again", async () => {
+  // The grade threshold and the seriousness determination can both fire for one
+  // event. A coordinator paged three times for one symptom stops reading pages.
   __setDeliveryStore(null);
   const s = session(["I was admitted overnight with the bleeding."]);
-
-  const first = await executeTool(s, "record_adverse_event", {
+  const ae = {
     verbatim_term: "admitted overnight with the bleeding",
     coded_term: "Hemorrhage",
     onset_description: "yesterday",
@@ -232,38 +230,100 @@ test("one event does not page a coordinator three times", async () => {
     grade_rationale: "required hospitalisation",
     limits_self_care: false,
     spontaneous: true,
-  });
-  const eventId = (first.result as Record<string, unknown>).event_id as string;
+  };
 
+  const first = await executeTool(s, "record_adverse_event", ae);
+  const eventId = (first.result as Record<string, unknown>).event_id as string;
   await executeTool(s, "assess_seriousness", {
     event_id: eventId,
     criteria_met: ["hospitalization"],
     basis: "admitted overnight",
   });
-
-  // Re-recording the same event, as a correction would.
-  await executeTool(s, "record_adverse_event", {
-    verbatim_term: "admitted overnight with the bleeding",
-    coded_term: "Hemorrhage",
-    onset_description: "yesterday",
-    ongoing: true,
-    grade: 4,
-    grade_rationale: "corrected upward",
-    limits_self_care: true,
-    spontaneous: true,
-  });
+  // Same grade again, as a re-statement rather than a correction.
+  const again = await executeTool(s, "record_adverse_event", ae);
 
   const categories = s.escalations.map((e) => e.category);
-  assert.equal(
-    categories.filter((c) => c === "Grade 3 or above").length,
-    1,
-    "the grade threshold escalated twice for one event",
+  assert.equal(categories.filter((c) => c === "Grade 3 or above").length, 1);
+  assert.equal(categories.filter((c) => c === "Serious adverse event").length, 1);
+
+  // And it must not tell the model the page failed. It did not — it already
+  // happened. Reporting the skip as a failure is the same untruth this whole
+  // sprint removes, and it was reintroduced by the fix for it.
+  // No mail transport here, so nothing is genuinely deliverable and `false` is
+  // the truthful answer. The invariant is not "true" — it is that what the tool
+  // reports matches what the delivery store actually holds, in both directions.
+  const result = again.result as Record<string, unknown>;
+  const attempts = await getDeliveryStore().forSession(ID);
+  const reallyDelivered = attempts.some(
+    (d) =>
+      d.escalationId === s.escalations.find((e) => e.category === "Grade 3 or above")?.id &&
+      (d.status === "sent" || d.status === "acknowledged" || d.status === "suppressed"),
   );
   assert.equal(
-    categories.filter((c) => c === "Serious adverse event").length,
-    1,
-    "seriousness escalated more than once",
+    result.delivered,
+    reallyDelivered,
+    "the reported status must match the delivery store, not assume either way",
   );
+  __setDeliveryStore(null);
+});
+
+test("a correction upward re-pages at the higher tier", async () => {
+  // Grade 3 pages urgent. A correction to grade 4 is life-threatening, and
+  // deduplication must not hold the participant at the lower tier with the only
+  // page sitting in an inbox.
+  __setDeliveryStore(null);
+  const s = session(["I could not breathe at all last night."]);
+  const base = {
+    verbatim_term: "could not breathe at all",
+    coded_term: "Dyspnea",
+    onset_description: "last night",
+    ongoing: true,
+    grade_rationale: "corrected",
+    limits_self_care: true,
+    spontaneous: true,
+  };
+
+  await executeTool(s, "record_adverse_event", { ...base, grade: 3 });
+  const urgentOnly = await getDeliveryStore().forSession(ID);
+  assert.deepEqual(urgentOnly.map((d) => d.urgency), ["urgent"]);
+
+  await executeTool(s, "record_adverse_event", { ...base, grade: 4 });
+  const after = await getDeliveryStore().forSession(ID);
+  assert.ok(
+    after.some((d) => d.urgency === "emergency"),
+    "a correction to grade 4 left the only page at urgent",
+  );
+  __setDeliveryStore(null);
+});
+
+test("a red flag re-answered yes does not claim the page failed", async () => {
+  // The escalation is raised only on the transition to positive, so a repeat
+  // answer raises nothing — and reading that as "not delivered" handed the model
+  // "the page did NOT go through" for an emergency that had already been paged.
+  __setDeliveryStore(null);
+  const s = session(["Yes, my chest is tight.", "Yes, still tight."]);
+
+  await executeTool(s, "record_safety_screen_item", {
+    item_id: "chest_or_breathing",
+    answer: true,
+    verbatim: null,
+  });
+  const repeat = await executeTool(s, "record_safety_screen_item", {
+    item_id: "chest_or_breathing",
+    answer: true,
+    verbatim: null,
+  });
+
+  assert.equal(s.escalations.length, 1, "no second escalation for the same item");
+  const result = repeat.result as Record<string, unknown>;
+  // In this environment the first page could not be delivered, so the honest
+  // answer to "was anyone paged" is still no — and it must be reported from the
+  // earlier attempt's real status rather than assumed either way.
+  const attempts = await getDeliveryStore().forSession(ID);
+  const reallyDelivered = attempts.some(
+    (d) => d.status === "sent" || d.status === "acknowledged" || d.status === "suppressed",
+  );
+  assert.equal(result.delivered, reallyDelivered, "reported status must match reality");
   __setDeliveryStore(null);
 });
 

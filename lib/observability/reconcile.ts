@@ -138,8 +138,19 @@ export function sameSymptom(a: string, b: string): boolean {
   return false;
 }
 
+/** Midnight UTC of whatever day a timestamp falls on. */
+function dayOf(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? Math.floor(t / 86_400_000) * 86_400_000 : Number.NaN;
+}
+
 function withinWindow(a: string, b: string): boolean {
-  const days = Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+  // Both truncated to a date first. The comment above says time is ignored and
+  // the arithmetic did not: an eDiary row is midnight-dated while a call carries
+  // a full timestamp, so a 16:00 Wednesday check-in against a Sunday entry came
+  // out at 3.67 days and was rejected. That made the agreement floor a function
+  // of what time of day the participant answered the phone.
+  const days = Math.abs(dayOf(a) - dayOf(b)) / 86_400_000;
   return Number.isFinite(days) && days <= MATCH_WINDOW_DAYS;
 }
 

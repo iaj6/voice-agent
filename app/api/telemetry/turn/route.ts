@@ -5,6 +5,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
+ * How long after a call completes its own turns may still report timings.
+ *
+ * Long enough for the goodbye to be spoken and heard, short enough that a
+ * completed session is not an open write channel.
+ */
+const TELEMETRY_GRACE_MS = 2 * 60 * 1000;
+
+/**
  * Receives the one latency number the server cannot observe.
  *
  * The server knows when it dispatched a sentence. Only the browser knows when
@@ -47,10 +55,19 @@ export async function POST(request: Request) {
   if (!session) {
     return Response.json({ error: "Unknown session" }, { status: 404 });
   }
-  if (session.completedAt) {
-    // The docstring above claimed this and the code did not do it. Without it,
-    // any session id — including a long-completed, locked one — writes unbounded
-    // rows into the table the N-01 sign-off is computed from.
+  // A grace period, not a hard lock. complete_check_in sets completedAt and then
+  // tells the agent to say goodbye, so the closing turn is spoken *after* the
+  // session is locked — and every call's last turn, plus every call an emergency
+  // ended early, was rejected here and then reported by latency.mjs as a turn
+  // that "produced no audio at all". Both untrue, and both in the flattering
+  // direction, which is the same shape as the onStart and speakLocally bugs.
+  //
+  // Still bounded: this writes to the table N-01 is computed from, and a
+  // long-completed session must not be able to add rows to it forever.
+  const completedFor = session.completedAt
+    ? Date.now() - Date.parse(session.completedAt)
+    : 0;
+  if (completedFor > TELEMETRY_GRACE_MS) {
     return Response.json({ error: "This check-in is complete and locked." }, { status: 409 });
   }
 
