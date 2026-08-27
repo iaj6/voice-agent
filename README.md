@@ -523,9 +523,13 @@ participant:
   entirely.
 - **The speech provider is an unaddressed subprocessor.** The read-back sentence carries
   patient-reported symptom content, and it leaves for ElevenLabs. A real deployment needs a
-  BAA or DPA and a line in the informed consent's data-sharing section. The participant's
-  own audio never leaves the browser, and the fixed-wording cache keeps roughly 79% of the
+  BAA or DPA and a line in the informed consent's data-sharing section. The fixed-wording cache keeps roughly 79% of the
   agent's speech from being transmitted at all after its first render — but 79% is not 100%.
+  **And the participant's own audio does leave the browser.** This paragraph used to claim it
+  did not, which was true until sprint 4 put a Deepgram relay in the path and stopped being
+  true the moment it did: every call now streams raw 16 kHz PCM of everything the participant
+  says, through this server, to a fourth processor. That is a second BAA, a second line in the
+  consent form, and the single largest disclosure this system makes.
 - **Speech recognition errors are a clinical risk, not a UX annoyance.** A misheard symptom
   is a data integrity problem. Production needs confidence thresholds, explicit read-back
   of critical captures, and a much better answer than "ask them to repeat it."

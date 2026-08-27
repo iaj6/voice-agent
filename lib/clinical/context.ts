@@ -229,6 +229,48 @@ interface Scope {
   triggerTo: number;
 }
 
+/**
+ * Time units that make "in the past" a recall window rather than a history.
+ *
+ * "in the past" was listed as a historical trigger in both directions, so
+ * "I coughed up blood in the past few days" and "I have been thinking about
+ * killing myself in the past week" were both stood down as things that happened
+ * long ago. That is not an edge case — it is how a person answers a question
+ * about the last week, which is the only question this instrument asks.
+ *
+ * Worse, it was invisible to the measurement. Zero of the 473 corpus utterances
+ * use this phrasing, so this false-negative class was not inside the 27.0%
+ * sensitivity figure; it sat underneath it.
+ *
+ * A year is still history. Everything shorter is the window the protocol asks
+ * about, and a participant who says it is reporting something current.
+ */
+const RECENT_UNITS = new Set([
+  "hour", "hours", "day", "days", "night", "nights",
+  "week", "weeks", "fortnight", "month", "months",
+]);
+/** Quantifiers that sit between "in the past" and its unit. */
+const QUANTIFIERS = new Set([
+  "few", "couple", "of", "several", "two", "three", "four", "five", "six",
+  "seven", "ten", "many", "1", "2", "3", "4", "5", "6", "7", "10", "24", "48", "72",
+]);
+
+/**
+ * Whether a matched historical phrase is actually naming a recent window.
+ *
+ * Looks only at the tokens immediately after it, and only past quantifiers, so
+ * "in the past few days" cancels and "in the past, before I joined" does not.
+ */
+function namesRecentWindow(tokens: Token[], start: number): boolean {
+  for (let k = start; k < Math.min(start + 4, tokens.length); k++) {
+    const word = tokens[k].text;
+    if (RECENT_UNITS.has(word)) return true;
+    if (QUANTIFIERS.has(word)) continue;
+    return false;
+  }
+  return false;
+}
+
 function findScopes(tokens: Token[]): Scope[] {
   const scopes: Scope[] = [];
 
@@ -241,6 +283,16 @@ function findScopes(tokens: Token[]): Scope[] {
       for (const phrase of ordered) {
         const len = phraseLengthAt(tokens, i, phrase);
         if (!len) continue;
+
+        // "in the past few days" is a recall window, not a history. Checked here
+        // rather than by removing the phrase, because "in the past" genuinely is
+        // a historical marker when it is not followed by one of these.
+        if (
+          trigger.value === "historical" &&
+          namesRecentWindow(tokens, i + len)
+        ) {
+          continue;
+        }
 
         const sentence = tokens[i].sentence;
         let from: number;

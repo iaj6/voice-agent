@@ -87,6 +87,11 @@ const KINDS = {
   negated: "DENY it clearly. The person does NOT have this. It must be obvious they are saying no.",
   historical:
     "Refer to it as something that happened long ago and is over. It is NOT happening now.",
+  recall_window:
+    "It happened THIS WEEK and they are reporting it now. Phrase it the way someone " +
+    "answers a question about how the last several days have gone — 'in the past few " +
+    "days', 'over the past week', 'the last couple of days', 'this past week'. The " +
+    "event is current and reportable; only the way they date it is casual.",
   other_experiencer: "It happened to somebody else — a spouse, a neighbour, a friend. Not the speaker.",
   hypothetical: "Raise it as a worry or a what-if, not as something happening.",
 };
@@ -175,14 +180,28 @@ const normalise = (t) => t.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+
 const existing = new Set(corpus.utterances.map((e) => normalise(e.text)));
 
 // Which kinds should fire, and which are the specificity half of the corpus.
-const SIGNAL_KINDS = ["direct", "colloquial", "compound"];
+// `recall_window` is a signal kind: the event is current and reportable, and only
+// the way the participant dates it is casual. It was missing entirely — zero of
+// the first 473 utterances phrased anything as "in the past few days" — which is
+// how a whole class of false negative stayed underneath the sensitivity figure
+// rather than inside it. A corpus that cannot express a failure mode cannot
+// measure it, which is the same lesson the 53.9%-to-27.0% correction taught.
+const SIGNAL_KINDS = ["direct", "colloquial", "compound", "recall_window"];
 const QUIET_KINDS = ["negated", "historical", "other_experiencer", "hypothetical"];
 
 const staged = [];
 console.log(`\n${C.bold("growing corpus")} ${C.dim(`${topics.length} topic(s) × ${perKind} per kind`)}\n`);
 
 for (const topic of topics) {
-  const kinds = [...SIGNAL_KINDS, ...QUIET_KINDS];
+  // `--kind` narrows to one, for filling a gap in an existing corpus rather than
+  // growing it evenly. Adding recall_window to a corpus that already had 473
+  // entries needed exactly this: the other seven kinds were already covered.
+  const only = valueOf("--kind", "");
+  const kinds = only ? [only] : [...SIGNAL_KINDS, ...QUIET_KINDS];
+  if (only && !KINDS[only]) {
+    console.error(`\nUnknown --kind "${only}". One of: ${Object.keys(KINDS).join(", ")}\n`);
+    process.exit(2);
+  }
   // Settled, not all-or-nothing: with --all this is 70 calls, and one transport
   // failure used to throw away every batch that had already succeeded.
   const settled = await Promise.allSettled(

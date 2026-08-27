@@ -84,9 +84,16 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
 ### 4.3 Safety
 - **F-10 (P)** A deterministic control detects safety signals independently of the model.
 - **F-11 (P)** Directed safety screen before the symptom review, covering every topic the
-  protocol treats as reportable. *Currently 59% of signal topics; stroke, self-harm, severe
-  skin reactions and withdrawal intent are uncovered.*
+  protocol treats as reportable. *Nine of the ten signal topics are covered — stroke, severe
+  skin reactions and withdrawal intent were added in sprint 3. Self-harm is deliberately left
+  as an open probe rather than a red-flag item, because screening for it needs a validated
+  instrument and IRB approval rather than wording an engineer invented. The "59%" this line
+  claimed was three sprints out of date.*
 - **F-12 (P)** Positive red flags escalate deterministically, without model judgement.
+  *Raised deterministically since sprint 3 and **delivered** to a human only since
+  2026-08-27: for the whole life of the feature the escalation existed on the record and
+  reached nobody, because delivery was a step the producer had to remember and this one did
+  not. See sprint 7.*
 - **F-13 (P)** Escalations are **delivered**, acknowledged, retried, and alarm on non-ack.
   *Currently recorded but not delivered — the system makes a claim it cannot support.*
 - **F-14 (P)** Locale-appropriate emergency and crisis numbers.
@@ -113,7 +120,7 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
 | **N-02 (P)** | A provider outage degrades audibly, never to silence | Speech falls back; the model does not |
 | **N-03 (P)** | Zero fabricated content reaching the record or the speaker | Guarded three ways; no ongoing measurement |
 | **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 27.0% / 91.1% specificity on a 473-utterance corpus; trend in `docs/net-history.jsonl` |
-| **N-05 (P)** | Participant speech is not transmitted to a subprocessor without disclosure | Read-back text reaches the speech provider |
+| **N-05 (P)** | Participant speech is not transmitted to a subprocessor without disclosure | **Not met, and understated here until 2026-08-27.** This row described the agent's read-back text reaching ElevenLabs. Since sprint 4 the participant's **raw audio** — every word they say, as 16 kHz PCM — streams to Deepgram on every call. Two processors, no subprocessor disclosure anywhere in the repository, and no consent language covering either (6.2, 6.5). |
 | **N-06** | Concurrency for one site's weekly cadence (~20 calls/week) | Untested |
 
 ## 6. Explicit non-goals for the pilot
@@ -134,16 +141,51 @@ The question a quality unit asks first: *how do you validate something non-deter
 You do not validate the model. You validate the **system of controls around it**, and you
 bound what the model is trusted to decide alone. Three moves:
 
-1. **Safety-critical decisions leave the model.** Anything with a reporting clock attached
-   is decided by a deterministic control that has a specification and a test suite.
-2. **The model proposes; a human disposes.** Every grade is a recommendation with a written
-   rationale. Grade 3+ leaves the automated path entirely.
-3. **The output space is constrained where it can be.** Verbatim instrument wording, strict
-   tool schemas, stop sequences that make fabrication structurally impossible rather than
-   discouraged.
+That is the argument. **The system does not yet make it**, and this section previously
+claimed it did. Corrected 2026-08-27 after the full audit; the three moves are stated here
+as the target, each with what is actually true underneath it.
 
-What remains genuinely open-ended is then a small enough surface to argue about — and the
-eval suite characterises it statistically rather than asserting it once.
+1. **Safety-critical decisions should leave the model.** Anything with a reporting clock
+   attached should be decided by a deterministic control with a specification and a test
+   suite.
+
+   *Today:* two deterministic controls exist and both now deliver — the regex net
+   (`lib/clinical/safety.ts`) and the directed screen. The net measures **27.9% sensitivity**
+   and catches **0 of 81** colloquial signal utterances. The screen only fires on the nine
+   questions it asks. Everything else — a symptom volunteered in the open question, anything
+   phrased in a way no rule matches — reaches a coordinator **only if the model chooses to
+   call `escalate_to_coordinator`**. Grade 3+ and a positive seriousness determination, the
+   two things §7.1 names as having a clock, produce an instruction string and nothing else:
+   `ESCALATION_GRADE_THRESHOLD` has one consumer, and it selects between two sentences.
+
+   So the honest statement is the one `scripts/measure-net.mjs` already prints in its own
+   footer: **the net is a floor, not a ceiling — the model is the primary detector.** The
+   deterministic controls bound the worst case; they do not carry the case.
+
+2. **The model proposes; a human disposes.** Every grade is a recommendation with a written
+   rationale.
+
+   *Today:* true for the record — a coordinator reviews it — and false for the automated
+   path. "Grade 3+ leaves the automated path entirely" was never implemented. A grade 5
+   event recorded with no escalation raises nothing.
+
+3. **The output space is constrained where it can be.** Verbatim instrument wording, strict
+   tool schemas, a turn-boundary guard, and a provenance gate that refuses to record a quote
+   the participant did not say.
+
+   *Today:* this one holds, and it is the strongest of the three. Stop sequences were tried
+   and found to leak on near-misses; the structural guard that replaced them cuts the turn
+   instead, and the provenance gate escalates on repeated fabrication.
+
+**What would have to change for (1) to be true.** Either a deterministic consequence for
+grade 3+ and for a positive seriousness determination, so the two clocked decisions do not
+depend on the model acting — or an explicit, documented decision that the model *is* the
+primary detector, with the validation argument rebuilt around characterising it statistically
+rather than around bounding it. The first is a sprint. The second is a different regulatory
+conversation, and it is the one this system is actually having.
+
+Both are defensible. Claiming the first while doing the second is not, and that is what this
+section did.
 
 **The consequence to plan for:** if a pinned model version changes, the instrument has
 changed. A provider silently upgrading behind the same name is an uncontrolled change to a

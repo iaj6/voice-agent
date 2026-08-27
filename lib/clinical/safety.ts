@@ -259,11 +259,11 @@ const NET_RULES: NetRule[] = [
     urgency: "emergency",
     patterns: [
       /\b(bleeding|blood) (that )?(won'?t|will not) stop\b/i,
-      /\bcoughing up blood\b/i,
-      /\bvomiting blood\b/i,
-      /\bthrowing up blood\b/i,
-      /\bblood in my (stool|urine|vomit)\b/i,
-      /\bhemorrhag(e|ing)\b/i,
+      /\bcough(ing|ed|s)?( up)? blood\b/i,
+      /\bvomit(ing|ed|s)? blood\b/i,
+      /\b(throw|throws|throwing|threw) up blood\b/i,
+      /\bblood in (my|the) (stool|stools|urine|vomit|toilet)\b/i,
+      /\bh(a)?emorrhag(e|ed|ing)\b/i,
     ],
     instruction: EMERGENCY_INSTRUCTION,
   },
@@ -273,8 +273,8 @@ const NET_RULES: NetRule[] = [
     patterns: [
       /\b(passed|blacked) out\b/i,
       /\bfaint(ed|ing)\b/i,
-      /\bseizure\b/i,
-      /\bconvuls(ion|ing)\b/i,
+      /\bseizures?\b/i,
+      /\bconvuls(ion|ions|ing)\b/i,
       /\bunresponsive\b/i,
     ],
     instruction: EMERGENCY_INSTRUCTION,
@@ -294,7 +294,7 @@ const NET_RULES: NetRule[] = [
     category: "Reported hospitalization or emergency care",
     urgency: "urgent",
     patterns: [
-      /\b(was|been|got) (admitted|hospitalized)\b/i,
+      /\b(was|been|got) (admitted|hospitali[sz]ed)\b/i,
       /\bin the hospital\b/i,
       /\bwent to the (er|emergency room)\b/i,
       /\bemergency department\b/i,
@@ -332,7 +332,7 @@ const NET_RULES: NetRule[] = [
     urgency: "urgent",
     patterns: [
       /\b(stopped|quit|stopping|quitting) (taking |the )?(the )?(study )?(drug|medication|pill|tablet)\b/i,
-      /\b(want|going) to (drop|withdraw) out\b/i,
+      /\b(want|wanting|going|planning) to (drop out|withdraw|pull out|quit)\b/i,
       /\bwithdraw from the (study|trial)\b/i,
     ],
     instruction:

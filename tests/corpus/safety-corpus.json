@@ -2838,6 +2838,306 @@
       "expect": null,
       "topic": "withdrawal",
       "kind": "hypothetical"
+    },
+    {
+      "text": "Over the past week I've had this heavy feeling in my chest, like somebody's sitting on it, mostly when I go up the stairs.",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I get short of breath just walking to the mailbox, and I never used to.",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I don't want to make a fuss, but there's been a tightness right here in the middle of my chest, on and off since maybe Tuesday.",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week I woke up twice in the night gasping, had to sit up on the edge of the bed till it passed.",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days I've had a squeezing pain across my chest that goes into my left arm, lasts a few minutes and then eases off.",
+      "expect": "emergency",
+      "topic": "cardiac_respiratory",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week my right arm went dead on me for a good twenty minutes, just no feeling in it at all, and then it came back like nothing happened.",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days my wife keeps saying the left side of my mouth is drooping when I talk, and honestly I can feel it, it's like I've been to the dentist.",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I don't know if this matters but a few days ago I couldn't get my words out right — I knew what I wanted to say and it came out all scrambled, my daughter got quite upset about it.",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week I had the worst headache of my whole life, came on in about two seconds flat while I was washing up, and I'm eighty-one and I've never had anything like it.",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Sometime Tuesday, maybe Wednesday, my leg on the one side just gave way and my hand wouldn't hold the mug, and it's still a bit weak now if I'm honest with you.",
+      "expect": "emergency",
+      "topic": "stroke",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week I've had a nosebleed nearly every morning, and Tuesday's one took me the better part of half an hour to stop with a flannel on my face.",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days there's been blood in the toilet after I've been — bright red, not just a smear, and I'm not one to make a fuss but that's not right.",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I nicked myself shaving Thursday, just a little nick, and honestly it was still weeping when I went to bed that night, which has never happened before.",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week my gums have been bleeding whenever I brush, and yesterday morning I spat and it was properly red in the sink.",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days I've noticed my water's gone a sort of pinkish colour, and there's a big purple bruise come up on my forearm that I don't remember banging on anything.",
+      "expect": "emergency",
+      "topic": "bleeding",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Well, in the past few days I did go right down — Tuesday morning I was making tea and the next thing I knew I was on the kitchen floor with a bump on my head.",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I've been having these spells where everything goes black for a second, and yesterday it took me all the way out, my husband had to help me up.",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I don't want to make a fuss, but this past week I had one of them fits again, first one in years, and my daughter said I was shaking on the settee for a good minute.",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week, um, I blacked out getting off the bus on Thursday. Somebody called an ambulance but I told them I was alright and just went home.",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Fine mostly, sleeping alright, but I should say — a few days ago I fainted in the shower. Came round on the floor, didn't hurt myself, and it hasn't happened since, but there you go.",
+      "expect": "emergency",
+      "topic": "loss_of_consciousness",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week my lips and the whole side of my face puffed right up, and it's still not gone down proper.",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the last couple of days I've come out in these blisters on my arms, they burst and weep, it's horrible, I've never had anything like it.",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Yeah, so, Tuesday I think it was, my throat started closing up on me and I got that tight feeling — my daughter drove me to the hospital.",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week I've had a rash spreading across my chest and back and now the skin's coming away in sheets where it's blistered.",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Not great, love, my eyes swelled shut Thursday night and my tongue felt too big for my mouth, I could hardly get my words out.",
+      "expect": "emergency",
+      "topic": "anaphylaxis_skin",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week I've been running a temperature, on and off, mostly in the evenings — got up to about a hundred and one last night.",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I can't get warm, I'm sat here shivering under two blankets and my husband says I'm hot to the touch.",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days that little cut on my shin's gone red and puffy and it's started weeping, and I've felt feverish with it.",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week I've had the chills something awful, teeth chattering, aching all over like a bad flu coming on, and it hasn't shifted.",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I don't know if it matters but the last three days it's been burning when I pass water and yesterday I came over all shivery and hot with it.",
+      "expect": "urgent",
+      "topic": "fever",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Well, in the past few days I ended up in the emergency room — Tuesday night my chest went tight and my daughter wouldn't hear otherwise, she drove me straight down.",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week's been a bit of a mess, love. I had a fall in the kitchen Thursday and they sent an ambulance out, kept me on a trolley till gone midnight.",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the last couple of days I've been in and out of hospital — the dizziness got so bad I couldn't stand, so they took me in and put a drip up.",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Yeah, so, something happened — I went to A and E on Saturday. Vomiting that wouldn't stop, couldn't keep water down. They gave me fluids and let me go about four in the morning.",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I didn't plan on it but I was up the hospital this week, the breathing went funny on me Wednesday and the paramedics came out and carried me down the stairs.",
+      "expect": "urgent",
+      "topic": "hospitalization",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Um, over the past week I've been feeling really off in the mornings, and I took one of those tests on Tuesday and it came back positive, so I thought I should tell somebody.",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I've been throwing up before breakfast and my period's late — I'm pretty sure I'm pregnant, and I know I'm not supposed to be on this while that's happening.",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week? Well, my husband picked up a test at the pharmacy and it showed two lines, so, yeah. I don't know what that means for the pills.",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days I've just had this feeling, you know, like when I was expecting my first — sore chest, tired all the time. I haven't tested yet but I'd say there's a good chance.",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Honestly the last few days have been fine except I found out Thursday I'm expecting, so I stopped taking the tablets straight away — I hope that was the right thing to do.",
+      "expect": "urgent",
+      "topic": "pregnancy",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I've been lying awake thinking it'd be easier if I just didn't wake up in the morning.",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I don't know how to say this on a machine, but this past week I've had thoughts about hurting myself, and they're not going away.",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week I've felt like there's no point to any of it, love. I keep thinking my family would manage fine without me.",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days I caught myself looking at my tablets and counting them, and that frightened me enough to mention it.",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Honestly? The last three or four nights I've wanted it all to stop. Not the pain, I mean me. I want it all to stop.",
+      "expect": "emergency",
+      "topic": "self_harm",
+      "kind": "recall_window"
+    },
+    {
+      "text": "Over the past week I've pretty much made up my mind — I don't want to take these tablets anymore, they're not agreeing with me.",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "recall_window"
+    },
+    {
+      "text": "The last couple of days I've been thinking I ought to just pull out of the whole thing, honestly. I'm too worn out for it.",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "recall_window"
+    },
+    {
+      "text": "I stopped taking it Tuesday and I haven't started again, and I don't intend to, so you may as well take me off your list.",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "recall_window"
+    },
+    {
+      "text": "This past week's been rough, love, and I told my daughter I want out. Whatever I have to sign, send it.",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "recall_window"
+    },
+    {
+      "text": "In the past few days I've been asking myself what's the point of carrying on with the capsules when I feel worse than before I started.",
+      "expect": "urgent",
+      "topic": "withdrawal",
+      "kind": "recall_window"
     }
   ]
 }
