@@ -21,6 +21,7 @@
 
 import type { CheckInSession } from "../store/session.ts";
 import type { EscalationRecord } from "../store/session.ts";
+import { saveSession } from "../store/session.ts";
 import { deliverEscalation, type DeliveryOutcome } from "./deliver.ts";
 
 export interface RaiseOptions {
@@ -55,6 +56,22 @@ export async function raiseEscalation(
     after: escalation,
     reason: options.auditReason,
   });
+
+  // Persisted before delivery, which is what the runner's safety-net producer
+  // already does. deliverEscalation writes a row immediately, while the session
+  // is only saved after the whole tool batch — so a crash in between left a
+  // delivery whose escalation_id appears nowhere in the stored record. That is
+  // the inverse of the invariant reconcile-escalations.mjs checks, and it cannot
+  // see it: it looks for escalations with no attempts, not attempts with no
+  // escalation.
+  //
+  // Best-effort. A save that fails must not stop the page going out — the record
+  // is recoverable and a missed emergency is not.
+  try {
+    await saveSession(session);
+  } catch {
+    /* the page matters more than the ordering */
+  }
 
   return deliverEscalation(session, escalation, { onCall: options.onCall ?? true });
 }

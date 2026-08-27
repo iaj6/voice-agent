@@ -51,6 +51,7 @@ export function ReviewQueue() {
   const [needsToken, setNeedsToken] = useState(false);
   const [token, setToken] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const [rejected, setRejected] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams({ days: "30" });
@@ -66,6 +67,9 @@ export function ReviewQueue() {
         if (!current) return;
         if (r.status === 401) {
           setError(null);
+          // A wrong secret and a blocked cookie produced the identical blank
+          // form, with no way to tell them apart.
+          if (attempt > 0) setRejected(true);
           setNeedsToken(true);
           return;
         }
@@ -98,13 +102,18 @@ export function ReviewQueue() {
             e.preventDefault();
             // Session cookie, not persistent: a review token left on disk on a
             // shared clinic machine is the same disclosure by a slower route.
-            // Secure, because this cookie is the bearer credential for the whole
-            // PHI surface and SameSite does nothing to stop it crossing a
-            // plaintext hop — an internal clinic deployment on http:// is the
-            // realistic case. It is a no-op on localhost in current browsers.
+            // Secure where it can be. This cookie is the bearer credential for
+            // the whole PHI surface and SameSite does nothing to stop it crossing
+            // a plaintext hop — but a browser *rejects* a Secure cookie written
+            // from a non-secure origin, so setting it unconditionally meant the
+            // clinic deployment this was written for could never log in at all:
+            // the cookie vanished, the refetch 401'd, and the form re-rendered
+            // blank forever.
+            const secure = window.location.protocol === "https:" ? "; Secure" : "";
             document.cookie =
               `voice_agent_review=${encodeURIComponent(token)}; path=/; ` +
-              `SameSite=Strict; Secure`;
+              `SameSite=Strict${secure}`;
+            setRejected(false);
             setToken("");
             setAttempt((n) => n + 1);
           }}
@@ -115,6 +124,12 @@ export function ReviewQueue() {
             they spoke to verify their identity. It is closed without the review
             secret.
           </p>
+          {rejected ? (
+            <p className="text-[11px]" style={{ color: "var(--color-oxide)" }}>
+              That secret was not accepted. If this page is served over plain
+              HTTP, the browser may also be refusing to store it.
+            </p>
+          ) : null}
           <input
             type="password"
             value={token}

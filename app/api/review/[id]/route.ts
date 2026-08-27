@@ -29,6 +29,12 @@ export async function GET(
   if (!reviewAuthorised(request)) return reviewRefusal();
 
   const { id } = await params;
+  // Checked before the lookup: `check_in_session.id` is a uuid column, so a
+  // truncated or mistyped deep link threw "invalid input syntax for type uuid"
+  // out of the driver as an unhandled 500 rather than reaching the 404 below.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return Response.json({ error: "Unknown call" }, { status: 404 });
+  }
   const session = await getSession(id);
   if (!session) {
     return Response.json({ error: "Unknown call" }, { status: 404 });

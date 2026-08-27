@@ -188,8 +188,10 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
     };
     const all = store.__all?.() ?? [];
     return all
+      // Filtered first, then limited — the Postgres path applies its LIMIT after
+      // the WHERE, and slicing first meant a memory store full of eval sessions
+      // returned fewer real calls than asked for and silently dropped the oldest.
       .filter((s) => !query.since || Date.parse(s.createdAt) >= query.since.getTime())
-      .slice(-limit)
       .map((s) => {
         const session = s as unknown as Record<string, unknown>;
         return summarise({
@@ -208,7 +210,8 @@ export async function listSummaries(query: SummaryQuery = {}): Promise<CallSumma
       })
       .filter(
         (c) => includeSynthetic || (!c.synthetic && !beforeSyntheticFlag(c.createdAt)),
-      );
+      )
+      .slice(-limit);
   }
 
   const sql = getDb();

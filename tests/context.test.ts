@@ -343,3 +343,38 @@ test("nothing is quotable before the subject has spoken", () => {
   assert.match(v.reason ?? "", /has not said anything yet/);
 });
 
+
+test("a history stated in one sentence is not un-scoped by the next", () => {
+  // The tokenizer drops terminators rather than emitting them, so a lookahead
+  // that does not check the sentence walks into the following one: "I had a
+  // seizure years ago. Days have been fine since." cancelled a correct
+  // historical scope on the word "Days" and escalated a years-old seizure as a
+  // current emergency.
+  for (const text of [
+    "I had a seizure years ago. Days have been fine since.",
+    "I had convulsions a long time ago. Weeks go by now.",
+    "I had a fever last year. A couple of days later it passed.",
+  ]) {
+    assert.equal(
+      assertedHits(scanForSafetySignals(text)).length,
+      0,
+      `"${text}" escalated a history`,
+    );
+  }
+});
+
+test("only an ambiguous historical phrase is cancelled by what follows it", () => {
+  // "years ago" is history whatever comes next. "in the past" is history on its
+  // own and a recall window followed by a short unit — and it is listed as both a
+  // forward and a backward trigger, so the cancellation cannot be keyed on
+  // direction.
+  assert.ok(
+    assertedHits(scanForSafetySignals("I coughed up blood in the past few days")).length > 0,
+    "a recall window was stood down as history",
+  );
+  assert.equal(
+    assertedHits(scanForSafetySignals("I coughed up blood in the past, before the study")).length,
+    0,
+    "a genuine history fired",
+  );
+});

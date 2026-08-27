@@ -245,6 +245,19 @@ interface Scope {
  * A year is still history. Everything shorter is the window the protocol asks
  * about, and a participant who says it is reporting something current.
  */
+/**
+ * Historical phrases whose meaning depends on what follows them.
+ *
+ * "years ago" and "a long time ago" are unambiguously historical, and what comes
+ * after says nothing about them — cancelling those on a following time word
+ * disarmed correct scoping. "in the past" is different: on its own it is history,
+ * and followed by a short unit it is the recall window this instrument asks
+ * about. Only the ambiguous ones get the lookahead, in either direction, because
+ * "in the past" is listed both ways and it is the *backward* one that was
+ * standing down "I coughed up blood in the past few days".
+ */
+const AMBIGUOUS_HISTORICAL = new Set(["in the past"]);
+
 const RECENT_UNITS = new Set([
   "hour", "hours", "day", "days", "night", "nights",
   "week", "weeks", "fortnight", "month", "months",
@@ -262,7 +275,14 @@ const QUANTIFIERS = new Set([
  * "in the past few days" cancels and "in the past, before I joined" does not.
  */
 function namesRecentWindow(tokens: Token[], start: number): boolean {
+  // Bounded to the sentence the phrase is in. The tokenizer drops terminators
+  // rather than emitting them, so without this the lookahead walked straight into
+  // the next sentence: "I had a seizure years ago. Days have been fine since."
+  // cancelled a correct historical scope on the word "Days" and escalated a
+  // seizure from years ago as a current emergency.
+  const sentence = start > 0 ? tokens[start - 1].sentence : tokens[start]?.sentence;
   for (let k = start; k < Math.min(start + 4, tokens.length); k++) {
+    if (tokens[k].sentence !== sentence) return false;
     const word = tokens[k].text;
     if (RECENT_UNITS.has(word)) return true;
     if (QUANTIFIERS.has(word)) continue;
@@ -287,8 +307,10 @@ function findScopes(tokens: Token[]): Scope[] {
         // "in the past few days" is a recall window, not a history. Checked here
         // rather than by removing the phrase, because "in the past" genuinely is
         // a historical marker when it is not followed by one of these.
+        //
         if (
           trigger.value === "historical" &&
+          AMBIGUOUS_HISTORICAL.has(phrase) &&
           namesRecentWindow(tokens, i + len)
         ) {
           continue;

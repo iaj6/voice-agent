@@ -242,9 +242,10 @@ test("re-recording an event at the same grade does not page again", async () => 
   // Same grade again, as a re-statement rather than a correction.
   const again = await executeTool(s, "record_adverse_event", ae);
 
-  const categories = s.escalations.map((e) => e.category);
-  assert.equal(categories.filter((c) => c === "Grade 3 or above").length, 1);
-  assert.equal(categories.filter((c) => c === "Serious adverse event").length, 1);
+  // One escalation for the event, whichever control raised it first. The
+  // seriousness fact lives on the event and in the trail, not in a second page.
+  assert.equal(s.escalations.length, 1, "one event, one escalation");
+  assert.equal(s.adverseEvents[0].seriousness?.isSerious, true);
 
   // And it must not tell the model the page failed. It did not — it already
   // happened. Reporting the skip as a failure is the same untruth this whole
@@ -324,6 +325,69 @@ test("a red flag re-answered yes does not claim the page failed", async () => {
     (d) => d.status === "sent" || d.status === "acknowledged" || d.status === "suppressed",
   );
   assert.equal(result.delivered, reallyDelivered, "reported status must match reality");
+  __setDeliveryStore(null);
+});
+
+test("a grade 3 event that is also serious pages once, not twice", async () => {
+  // The grade-3 tool result instructs the model to assess seriousness next, so
+  // this is the standard path for every serious event — and it produced two
+  // escalations and two pages seconds apart. The test that was meant to cover it
+  // used grade 2, which never reaches the grade threshold at all.
+  __setDeliveryStore(null);
+  const s = session(["They kept me in overnight with the bleeding."]);
+  const rec = await executeTool(s, "record_adverse_event", {
+    verbatim_term: "kept me in overnight with the bleeding",
+    coded_term: "Hemorrhage",
+    onset_description: "yesterday",
+    ongoing: true,
+    grade: 3,
+    grade_rationale: "required admission",
+    limits_self_care: false,
+    spontaneous: true,
+  });
+  await executeTool(s, "assess_seriousness", {
+    event_id: (rec.result as Record<string, unknown>).event_id as string,
+    criteria_met: ["hospitalization"],
+    basis: "admitted overnight",
+  });
+
+  assert.equal(s.escalations.length, 1, "one event, one escalation");
+  assert.equal((await getDeliveryStore().forSession(ID)).length, 1, "paged twice");
+  // The seriousness fact is not lost — it is on the event and in the trail.
+  assert.equal(s.adverseEvents[0].seriousness?.isSerious, true);
+  assert.ok(
+    s.audit.all().some((e) => e.action === "SAE_DETERMINED"),
+    "the determination must still be on the record",
+  );
+  __setDeliveryStore(null);
+});
+
+test("a life-threatening determination still upgrades an urgent page", async () => {
+  // Deduping per event must not hold a participant at the lower tier when the
+  // seriousness assessment is the thing that reveals it is life-threatening.
+  __setDeliveryStore(null);
+  const s = session(["I stopped breathing and they shocked me."]);
+  const rec = await executeTool(s, "record_adverse_event", {
+    verbatim_term: "stopped breathing",
+    coded_term: "Cardiac arrest",
+    onset_description: "last night",
+    ongoing: false,
+    grade: 3,
+    grade_rationale: "initially graded 3",
+    limits_self_care: false,
+    spontaneous: true,
+  });
+  await executeTool(s, "assess_seriousness", {
+    event_id: (rec.result as Record<string, unknown>).event_id as string,
+    criteria_met: ["life_threatening"],
+    basis: "required resuscitation",
+  });
+
+  const attempts = await getDeliveryStore().forSession(ID);
+  assert.ok(
+    attempts.some((d) => d.urgency === "emergency"),
+    "a life-threatening determination left the only page at urgent",
+  );
   __setDeliveryStore(null);
 });
 

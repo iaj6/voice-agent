@@ -360,9 +360,18 @@ async function escalateForEvent(
   reason: string,
   category: string,
 ): Promise<{ raised: boolean; delivered: boolean; detail: string | null }> {
-  const prior = session.escalations.find(
-    (e) => e.category === category && e.relatedEventIds.includes(event.id),
-  );
+  // Matched on the event, not on (category, event). Keying on both meant the
+  // grade threshold and the seriousness determination never saw each other, so a
+  // grade 3 event that is also serious raised two escalations and sent two pages
+  // seconds apart — and the grade-3 tool result *tells* the model to assess
+  // seriousness next, so that was the standard path, not an edge case. Exactly
+  // what the paragraph above claims this prevents.
+  //
+  // The seriousness fact is not lost by paging once: it is on the event itself
+  // and in the audit trail as SAE_DETERMINED, both of which the coordinator sees
+  // on opening the record. What they do not get is a second alert about a symptom
+  // they are already looking at.
+  const prior = session.escalations.find((e) => e.relatedEventIds.includes(event.id));
 
   if (prior && URGENCY_RANK[urgency] <= URGENCY_RANK[prior.urgency]) {
     // Already covered at this tier or higher. Report what actually happened to
@@ -373,13 +382,41 @@ async function escalateForEvent(
         d.escalationId === prior.id &&
         (d.status === "sent" || d.status === "acknowledged" || d.status === "suppressed"),
     );
-    return {
-      raised: false,
-      delivered,
-      detail: delivered ? null : "an earlier page for this event did not go through",
-    };
+    if (delivered) return { raised: false, delivered: true, detail: null };
+
+    const attempted = attempts.some((d) => d.escalationId === prior.id);
+    if (attempted) {
+      // Tried and failed. Not re-raised: the sweeper retries failed rows, and a
+      // second escalation would give it two ladders for one symptom. Reported
+      // honestly instead.
+      return {
+        raised: false,
+        delivered: false,
+        detail: "an earlier page for this event did not go through",
+      };
+    }
+
+    // An escalation with no attempt at all in this session is one carryForward
+    // brought over from a dropped call: it renumbers escalations into the
+    // successor and leaves the delivery filed under the old session id, so the
+    // page did happen and cannot be seen from here.
+    //
+    // Paged again rather than guessed at. A duplicate alert about a symptom the
+    // coordinator has already seen is a nuisance; telling a participant nobody
+    // knows about their chest pain when somebody does is not.
+    return raiseAndReport(session, event, urgency, reason, category);
   }
 
+  return raiseAndReport(session, event, urgency, reason, category);
+}
+
+async function raiseAndReport(
+  session: CheckInSession,
+  event: { id: string; codedTerm: string },
+  urgency: EscalationUrgency,
+  reason: string,
+  category: string,
+): Promise<{ raised: boolean; delivered: boolean; detail: string | null }> {
   const outcome = await raiseEscalation(
     session,
     {
