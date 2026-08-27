@@ -156,6 +156,51 @@ produces it.*
 
 ---
 
+## Sprint 7 — A safety signal reaches a human
+
+*From the 2026-08-26 full audit: 61 verified findings, 5 critical. All four of the
+critical code findings are the same defect, found independently by four lenses.*
+
+**The premise this project is built on is not true today.** `SPEC.md` §7.1 says
+"Safety-critical decisions leave the model." Trace every deterministic path from a
+participant saying something dangerous to a human being paged and only one of them
+delivers: the regex net, at 27.0% sensitivity, minus everything ConText stands
+down. The directed screen — added in sprint 3 *because* the net is 27% — pages
+nobody. Grade 3+ and the SAE determination produce an instruction string. What
+actually pages a coordinator, in almost every real case, is the model choosing to.
+
+| ID | Item | Tier | Criterion | Status |
+|---|---|:---:|---|---|
+| 7.1 | A positive red-flag screen item delivers | B | A delivery row exists, and a test asserts on it rather than on the record | **done — routed through `raiseEscalation`, which makes delivery what raising *is* rather than a procedure each producer remembers. The tool now reports `delivered`/`notified` from what it observed, returns `isError` when nobody was paged, and tells the agent in that case to give the local emergency number and explicitly not to claim a coordinator was alerted. Proved end to end: a live eval call raising a screen emergency produced 0 delivery attempts before, 1 after.** |
+| 7.2 | No escalation can exist without a delivery attempt | A | A reconciliation alarms on any escalation with no delivery row | **done — `scripts/reconcile-escalations.mjs` joins escalations inside the record JSONB against `escalation_delivery`, which is the only place the two can be compared and which nothing in the running system ever did. Exits non-zero on any gap. Bounded to escalations raised after 4024f50, when delivery existed at all — 190 predate it and would bury the signal. One documented false positive: a carried-forward escalation is renumbered into the successor session, so its delivery is filed under the old id.** |
+| 7.3 | SPEC §7.1 and every claim that inherits it say what is true | C→A | The spec describes the system that exists | todo |
+| 7.4 | ConText no longer suppresses on weekly-recall phrasing | B | "in the past few days" does not stand down a rule; corpus covers it | todo |
+| 7.5 | Re-measure the net with recall phrasing in the corpus | B | A sensitivity figure that includes the phrasing participants use | todo |
+| 7.6 | The repeated-fabrication escalation delivers | B | Same criterion as 7.1 | **done — same chokepoint. An agent repeatedly attributing words to a participant who never said them is the strongest available signal a call cannot be trusted, and it reached nobody.** |
+| 7.7 | Grade 3+ and a positive SAE determination have a deterministic consequence | B | Neither depends on the model choosing to act | todo |
+| 7.8 | Dead branches in the net: plurals, British spellings | B | Every rule matches the forms participants actually say | todo |
+| 7.9 | A screen answer cannot be recorded for a question never asked | B | Recording an unasked item is refused, not just discouraged | todo |
+
+---
+
+## Sprint 8 — The record protects itself
+
+*Audit integrity, destruction, and access control. Everything here is a claim the
+system currently makes that the code does not keep.*
+
+| ID | Item | Tier | Criterion | Status |
+|---|---|:---:|---|---|
+| 8.1 | Participant speech is out of `audit_entry.reason` | B | Nothing readable survives in the one table that rejects UPDATE and DELETE | todo |
+| 8.2 | Crypto-shredding covers every channel of subject free text | B | `escalations[].reason`, `.category`, `gradeRationale`, `summary` are sealed | todo |
+| 8.3 | One destruction path, and it is the tested one | A | `shred.mjs` calls `shredSubject()`; no second SQL implementation | todo |
+| 8.4 | Audit sequence numbers cannot collide | B | Two writers cannot assign the same seq; a dropped entry is loud | todo |
+| 8.5 | Acknowledgement is on the record's own trail | B | The only human action in the system is in the hash chain | todo |
+| 8.6 | Unauthenticated routes that disclose a record are closed | A | `GET /api/session`, `GET /api/subject/withdrawal` require a caller | todo |
+| 8.7 | The telephony shim identifies a call by something better than a hash of its first utterance | A | Two participants opening the same way cannot share a session | todo |
+| 8.8 | A failed verification does not leave spoken identity unsealed | B | The key is bound before anything is written | todo |
+
+---
+
 ## Sprint 6 — Pilot readiness
 
 *Mostly not code. I draft; clinical and regulatory judgement is Ian's.*

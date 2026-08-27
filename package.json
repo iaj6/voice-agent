@@ -20,6 +20,7 @@
     "latency": "node scripts/latency.mjs",
     "drift": "node scripts/drift.mjs",
     "reconcile": "node scripts/reconcile.mjs",
+    "reconcile:escalations": "node scripts/reconcile-escalations.mjs",
     "verify": "node scripts/verify.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
   },

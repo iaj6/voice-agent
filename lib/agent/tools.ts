@@ -20,6 +20,7 @@ import {
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
 import { deliverEscalation } from "../escalation/deliver.ts";
+import { raiseEscalation } from "../escalation/raise.ts";
 import { getDeliveryStore } from "../store/deliveries.ts";
 
 /** How many times one escalation may block a live call on a failing provider. */
@@ -330,12 +331,12 @@ type Handler = (
  */
 const PROVENANCE_ESCALATION_THRESHOLD = 3;
 
-function screenQuote(
+async function screenQuote(
   session: CheckInSession,
   field: string,
   quote: string | null | undefined,
   context: string,
-): string | null {
+): Promise<string | null> {
   if (quote == null || quote.trim() === "") return null;
 
   const verdict = checkProvenance(quote, session.subjectUtterances);
@@ -391,15 +392,13 @@ function screenQuote(
         Date.now() + PROTOCOL.saeReportingWindowHours * 3600 * 1000,
       ).toISOString(),
     };
-    session.escalations.push(record);
-    session.status = "escalated";
-    session.audit.record({
+    // Delivered, not merely recorded. This had the same defect as the screen: an
+    // agent repeatedly attributing words to a participant who never said them is
+    // the strongest possible signal that the call cannot be trusted, and it
+    // reached nobody.
+    await raiseEscalation(session, record, {
       actor: "safety_net",
-      action: "ESCALATED",
-      entity: "Escalation",
-      entityId: record.id,
-      after: record,
-      reason:
+      auditReason:
         "Repeated unfounded quotes. Deterministic, independent of model judgment.",
     });
   }
@@ -813,7 +812,7 @@ const handlers: Record<string, Handler> = {
     };
   },
 
-  record_safety_screen_item(session, input) {
+  async record_safety_screen_item(session, input) {
     if (!session.subject) {
       return {
         result: { error: "Subject is not verified. Verify before screening." },
@@ -832,7 +831,7 @@ const handlers: Record<string, Handler> = {
 
     // The quote is screened; the ANSWER is not discarded with it. A red-flag
     // "yes" is the field with a reporting clock attached.
-    const screenedVerbatim = screenQuote(
+    const screenedVerbatim = await screenQuote(
       session,
       "verbatim",
       input.verbatim as string | null,
@@ -885,6 +884,7 @@ const handlers: Record<string, Handler> = {
     // itself, so nothing downstream caught it either.
     const wasAlreadyPositive = before?.answer === true;
     let raised: string | null = null;
+    let delivery: Awaited<ReturnType<typeof deliverEscalation>> | null = null;
     if (isRedFlag && !wasAlreadyPositive) {
       const escalation = {
         id: nextEscalationId(session),
@@ -901,19 +901,28 @@ const handlers: Record<string, Handler> = {
                 Date.now() + PROTOCOL.saeReportingWindowHours * 3600 * 1000,
               ).toISOString(),
       };
-      session.escalations.push(escalation);
-      session.status = "escalated";
-      session.audit.record({
+      raised = escalation.id;
+
+      // Delivered before this returns, exactly as escalate_to_coordinator does.
+      //
+      // This did not happen, and it is the worst defect this system has had. The
+      // escalation was pushed, the status was set, the audit entry was written,
+      // and the tool told the model "the coordinator is already paged" — while
+      // nothing was sent anywhere. No row in escalation_delivery means the retry
+      // ladder, the backup contact, the non-acknowledgement alarm and the morning
+      // digest were all structurally blind to it: every one of them is a query
+      // over that table. And system-prompt.ts forbids the model from escalating a
+      // screen item itself, "because that has already been done for you", so the
+      // one remaining path was closed off too.
+      //
+      // The directed screen exists because the regex net measures 27% sensitivity.
+      // It was the deterministic path, and it paged nobody.
+      delivery = await raiseEscalation(session, escalation, {
         actor: "safety_net",
-        action: "ESCALATED",
-        entity: "Escalation",
-        entityId: escalation.id,
-        after: escalation,
-        reason:
+        auditReason:
           `Deterministic escalation from a positive directed screen item (${itemId}). ` +
           "Independent of model judgment.",
       });
-      raised = escalation.id;
     }
 
     const applicable = PROTOCOL.safetyScreen.filter(
@@ -924,29 +933,60 @@ const handlers: Record<string, Handler> = {
     const answered = new Set(session.safetyScreen.items.map((i) => i.itemId));
     const remaining = applicable.filter((i) => !answered.has(i.id));
 
+    // Only ever claimed when a delivery actually succeeded. The agent reads this
+    // and says it out loud to a frightened person, so "the coordinator has been
+    // paged" has to be a fact this tool observed rather than one it assumed.
+    const paged = delivery?.delivered === true;
+    const coordinator = session.subject.coordinatorName;
+    // Same reasoning as escalate_to_coordinator: telling someone in Manchester to
+    // call 911 costs them the seconds that matter most.
+    const region = speakingRegion(
+      session.subject?.siteCountry,
+      session.subjectUtterances,
+      siteCountryForPrefix,
+    );
+
     return {
       result: {
         recorded: true,
         item: item.label,
         escalation_raised: raised,
+        delivered: raised ? paged : null,
+        notified: paged ? coordinator : null,
+        delivery_error: delivery?.detail ?? null,
+        acknowledge_by: delivery?.delivery?.deadlineAt ?? null,
         items_remaining: remaining.map((i) => i.id),
         instruction:
           isRedFlag && item.urgencyIfPositive === "emergency"
-            ? "This is an emergency-tier answer and the coordinator is already paged. " +
-              "Stop the screen. Tell the subject in one sentence to seek emergency care " +
-              "now, then call complete_check_in with ended_early true."
+            ? paged
+              ? `This is an emergency-tier answer and ${coordinator} has been paged. ` +
+                "Stop the screen. Tell the subject in one sentence to call " +
+                `${emergencyPhrase(region)} now and that their coordinator has been ` +
+                "alerted, then call complete_check_in with ended_early true."
+              : "This is an emergency-tier answer and the page did NOT go through. " +
+                "Do not tell the subject their coordinator has been alerted — that " +
+                `is not true. Stop the screen, tell them in one sentence to call ` +
+                `${emergencyPhrase(region)} now and to call their study site directly ` +
+                "afterwards, then call complete_check_in with ended_early true."
             : isRedFlag
-              ? `Recorded and ${session.subject.coordinatorName} has been paged — do not ` +
-                "call escalate_to_coordinator for this. Ask briefly what happened, record " +
-                "an adverse event if warranted, then carry on with the remaining screen items."
+              ? paged
+                ? `Recorded and ${coordinator} has been paged — do not call ` +
+                  "escalate_to_coordinator for this. Ask briefly what happened, record " +
+                  "an adverse event if warranted, then carry on with the remaining screen items."
+                : "Recorded, but the page did NOT go through. Do not say anyone has " +
+                  "been notified. Tell the subject to call their study site directly " +
+                  "today, then carry on with the remaining screen items."
               : remaining.length > 0
                 ? `Recorded. Next unanswered screen item: ${remaining[0].id}. Ask it exactly as written.`
                 : "Screen complete. Move to the solicited symptom review.",
       },
+      // An escalation nobody received is an error condition, and the model should
+      // see it as one rather than as a successful call.
+      isError: Boolean(raised) && !paged,
     };
   },
 
-  record_adverse_event(session, input) {
+  async record_adverse_event(session, input) {
     if (!session.subject) {
       return {
         result: { error: "Subject is not verified. Verify before recording anything." },
@@ -954,7 +994,7 @@ const handlers: Record<string, Handler> = {
       };
     }
 
-    const verbatimTerm = screenQuote(
+    const verbatimTerm = await screenQuote(
       session,
       "verbatim_term",
       input.verbatim_term as string | null,
@@ -1118,7 +1158,7 @@ const handlers: Record<string, Handler> = {
     };
   },
 
-  record_adherence(session, input) {
+  async record_adherence(session, input) {
     // Every other clinical writer is gated on verification; these two were not,
     // which is how they became reachable on the same turn as the safety net and
     // ended up in the carry-forward's path.
@@ -1135,7 +1175,7 @@ const handlers: Record<string, Handler> = {
     }
     const missed = Number(input.doses_missed ?? 0);
     // doses_missed is structured data and survives a doubtful reason.
-    const reason = screenQuote(
+    const reason = await screenQuote(
       session,
       "reason_verbatim",
       input.reason_verbatim as string | null,
@@ -1168,7 +1208,7 @@ const handlers: Record<string, Handler> = {
     };
   },
 
-  record_concomitant_medication(session, input) {
+  async record_concomitant_medication(session, input) {
     if (!session.subject) {
       return {
         result: {
@@ -1182,7 +1222,7 @@ const handlers: Record<string, Handler> = {
     }
     // The drug name and start date are what an interaction check needs; losing
     // them because the stated reason was loosely quoted has no clinical basis.
-    const indication = screenQuote(
+    const indication = await screenQuote(
       session,
       "indication_verbatim",
       input.indication_verbatim as string | null,

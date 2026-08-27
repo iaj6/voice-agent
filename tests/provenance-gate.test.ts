@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { executeTool } from "../lib/agent/tools.ts";
 import { AuditTrail } from "../lib/store/audit.ts";
 import { SUBJECTS } from "../lib/clinical/protocol.ts";
+import { getDeliveryStore } from "../lib/store/deliveries.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
 /**
@@ -104,14 +105,18 @@ test("a doubtful quote never costs the structured data beside it", async () => {
     "Yeah, my temperature was up around 103 on Sunday",
   ]);
 
-  const outcome = await executeTool(session, "record_safety_screen_item", {
+  await executeTool(session, "record_safety_screen_item", {
     item_id: "fever",
     answer: true,
     // Digits-versus-words, an ordinary transcription mismatch. Scores badly.
     verbatim: "my temperature hit a hundred and three on Sunday night",
   });
 
-  assert.notEqual(outcome.isError, true, "the call must succeed");
+  // The tool now reports isError when an escalation was raised and the page did
+  // not go through, which it cannot in a test with no mail transport. That is the
+  // point of the new contract: an escalation nobody received is an error, and the
+  // agent must see it as one rather than tell a participant they were paged.
+  // What this test is about is the *structured data*, which must survive either way.
   assert.ok(session.safetyScreen, "the answer must be recorded");
   assert.equal(session.safetyScreen.items[0].answer, true);
   assert.equal(
@@ -119,9 +124,16 @@ test("a doubtful quote never costs the structured data beside it", async () => {
     null,
     "the doubtful quote is dropped",
   );
-  assert.equal(session.escalations.length, 1, "the red flag must still page someone");
+  // Asserts on the artefact the outside world would see, not on the in-memory
+  // object the code just wrote. The old version of this assertion read
+  // `session.escalations.length` under the comment "the red flag must still page
+  // someone" — it named the page and checked the record, and it passed for the
+  // entire time the screen was paging nobody at all.
+  assert.equal(session.escalations.length, 1, "an escalation was raised");
   assert.equal(session.escalations[0].triggeredBy, "safety_net");
   assert.equal(session.status, "escalated");
+  const attempts = await getDeliveryStore().forSession(session.id);
+  assert.equal(attempts.length, 1, "and somebody was actually paged for it");
 });
 
 test("adherence keeps its dose count when only the reason is doubtful", async () => {
