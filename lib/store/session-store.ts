@@ -115,6 +115,17 @@ function sealRecord(record: StoredRecord, keyId: string, key: Buffer): StoredRec
       ...e,
       verbatimTerm: s(e.verbatimTerm) as never,
       onsetDescription: s(e.onsetDescription) as never,
+      // Model-authored, and routinely a quote: "could not shower Tuesday,
+      // daughter had to help". It survived a shred in the clear.
+      gradeRationale: s(e.gradeRationale) as never,
+    })),
+    // `reason` only. `urgency`, `category` and `triggeredBy` stay outside the
+    // seal on purpose — they are fixed vocabulary, they identify nobody, and the
+    // drift report and the review queue read them without ever holding a key.
+    // Sealing them would trade a real privacy property for no gain.
+    escalations: record.escalations.map((e) => ({
+      ...e,
+      reason: s(e.reason) as never,
     })),
     conMeds: record.conMeds.map((m) => ({
       ...m,
@@ -136,6 +147,32 @@ function sealRecord(record: StoredRecord, keyId: string, key: Buffer): StoredRec
   };
 }
 
+/**
+ * The summary is its own column, not part of the record JSONB.
+ *
+ * Which is why it was missed: `sealRecord` covers the record and the summary is
+ * beside it, so a model-authored paragraph about a participant's week — the most
+ * readable single thing in the database — survived key destruction in plain text.
+ *
+ * Stored as JSON text in the existing `text` column, so no migration and no
+ * schema change. Nothing queries it, so nothing breaks.
+ */
+function sealSummary(summary: string | null, id: string, key: Buffer): string | null {
+  return summary === null ? null : JSON.stringify(seal(summary, id, key));
+}
+
+/** Reads either shape: sealed JSON, or a plain summary written before this. */
+function unsealSummary(raw: string | null, key: Buffer | null): string | null {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (isSealed(parsed)) return unsealOrMark(parsed as SealedValue, key, "") as string;
+  } catch {
+    /* written before summaries were sealed; it is what it says it is */
+  }
+  return raw;
+}
+
 /** Inverse of sealRecord. Shredded fields come back as a marker, never a throw. */
 function unsealRecord(record: StoredRecord, key: Buffer | null): StoredRecord {
   // `shape` tells the marker what it is standing in for: an emptied array where
@@ -154,6 +191,11 @@ function unsealRecord(record: StoredRecord, key: Buffer | null): StoredRecord {
       ...e,
       verbatimTerm: u(e.verbatimTerm, "") as never,
       onsetDescription: u(e.onsetDescription, "") as never,
+      gradeRationale: u(e.gradeRationale, "") as never,
+    })),
+    escalations: (record.escalations ?? []).map((e) => ({
+      ...e,
+      reason: u(e.reason, "") as never,
     })),
     conMeds: (record.conMeds ?? []).map((m) => ({
       ...m,
@@ -520,7 +562,7 @@ class PostgresSessionStore implements SessionStore {
       conMeds: record.conMeds ?? [],
       escalations: record.escalations ?? [],
       solicitedReviewed: record.solicitedReviewed ?? [],
-      summary: (row.summary as string | null) ?? null,
+      summary: unsealSummary((row.summary as string | null) ?? null, key),
       completedAt: row.completed_at
         ? new Date(row.completed_at as string).toISOString()
         : null,
@@ -606,7 +648,7 @@ class PostgresSessionStore implements SessionStore {
              subject_id = ${session.subject?.subjectId ?? null},
              record = ${JSON.stringify(sealRecord(toRecord(session), session.id, key))}::jsonb,
              messages = ${JSON.stringify(seal(session.messages, session.id, key))}::jsonb,
-             summary = ${session.summary},
+             summary = ${sealSummary(session.summary, session.id, key)},
              completed_at = ${session.completedAt},
              updated_at = now()
        where id = ${session.id}`;
@@ -668,9 +710,11 @@ class PostgresSessionStore implements SessionStore {
       (session.summary ?? "") +
       ` [Interrupted; record carried forward into session ${successorId}.]`;
     const status = session.status === "escalated" ? "escalated" : "completed";
+    const supersedeKey = await getKeyStore().get(session.id);
     const closed = (await sql`
       update check_in_session
-         set completed_at = now(), status = ${status}, summary = ${summary},
+         set completed_at = now(), status = ${status},
+             summary = ${supersedeKey ? sealSummary(summary, session.id, supersedeKey) : summary},
              updated_at = now()
        where id = ${session.id} and completed_at is null
       returning id`) as { id: string }[];

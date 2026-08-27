@@ -142,6 +142,17 @@ export class AuditTrail {
       // chain, since verifyChain() would rehash the mutated value.
       before: this.protect(input.before),
       after: this.protect(input.after),
+      // NOT protected, deliberately — an operator reading a trail after a
+      // subject has been shredded still needs to know *why* each entry exists,
+      // and sealing this would leave a chain of opaque blobs nobody can account
+      // for.
+      //
+      // Which makes it a rule about callers: **nothing participant-derived may
+      // go in here.** `audit_entry` rejects UPDATE and DELETE, so anything
+      // written to this field survives key destruction and cannot be erased.
+      // Put the participant's words in `before`/`after`, which are sealed, and
+      // keep this to what the system did. One caller broke this — the
+      // seriousness basis — and the sentence it wrote was a quote.
       reason: input.reason,
       prevHash,
     };

@@ -191,12 +191,12 @@ system currently makes that the code does not keep.*
 
 | ID | Item | Tier | Criterion | Status |
 |---|---|:---:|---|---|
-| 8.1 | Participant speech is out of `audit_entry.reason` | B | Nothing readable survives in the one table that rejects UPDATE and DELETE | todo |
-| 8.2 | Crypto-shredding covers every channel of subject free text | B | `escalations[].reason`, `.category`, `gradeRationale`, `summary` are sealed | todo |
+| 8.1 | Participant speech is out of `audit_entry.reason` | B | Nothing readable survives in the one table that rejects UPDATE and DELETE | **done — `before` and `after` were sealed and `reason` was not, which is deliberate (an operator reading a shredded trail still needs to know why each entry exists) and therefore a rule about callers. One caller broke it: `assess_seriousness` interpolated the model-authored `basis`, which quotes participants readily. Moved into the sealed value; the rule is now written where `record()` is.** |
+| 8.2 | Crypto-shredding covers every channel of subject free text | B | `escalations[].reason`, `gradeRationale`, `summary` are sealed | **done — `sealRecord` is a per-field list and the list drifted behind the record. `gradeRationale` and `escalations[].reason` are sealed now; `summary` needed separate handling because it is its own column sitting *beside* the record rather than inside it, which is why it was missed — and it is the most readable single paragraph about a participant in the database. Sealed as JSON in the existing text column; old plain summaries still read. **`category`, `urgency` and `triggeredBy` stay outside the seal on purpose:** fixed vocabulary, identify nobody, and the drift report and review queue read them without ever holding a key.** |
 | 8.3 | One destruction path, and it is the tested one | A | `shred.mjs` calls `shredSubject()`; no second SQL implementation | todo |
 | 8.4 | Audit sequence numbers cannot collide | B | Two writers cannot assign the same seq; a dropped entry is loud | todo |
 | 8.5 | Acknowledgement is on the record's own trail | B | The only human action in the system is in the hash chain | todo |
-| 8.6 | Unauthenticated routes that disclose a record are closed | A | `GET /api/session`, `GET /api/subject/withdrawal` require a caller | todo |
+| 8.6 | Unauthenticated routes that disclose a record are closed | A | `GET /api/session`, `GET /api/subject/withdrawal` require a caller | **done — both behind the review secret. The withdrawal route mattered more: subject ids are sequential, so the whole roster's withdrawal status and the coordinator's free-text reason were enumerable by anyone who could reach the host. Synthetic sessions stay readable on `/api/session` so the eval harness keeps working — they hold no participant, and an attacker cannot mark a real session synthetic.** |
 | 8.7 | The telephony shim identifies a call by something better than a hash of its first utterance | A | Two participants opening the same way cannot share a session | todo |
 | 8.8 | A failed verification does not leave spoken identity unsealed | B | The key is bound before anything is written | todo |
 

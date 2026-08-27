@@ -19,6 +19,11 @@ import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/sc
 
 const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
 const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
+/** What the agent writes about a participant's week. The most readable single
+ *  paragraph about them in the database, and it has its own column. */
+const SUMMARY =
+  "Reports worsening fatigue since Tuesday; needed her daughter's help to shower.";
+
 const AE = {
   verbatim_term: "I've been very tired",
   coded_term: "Fatigue",
@@ -106,6 +111,58 @@ describe(
         !rows[0].v.includes("couldn't shower Tuesday"),
         "audit_entry holds the subject's words in the clear",
       );
+    });
+
+    /** A call that also *finished*, so the summary column is populated. */
+    async function completedCall() {
+      const store = getSessionStore();
+      const session = await store.create();
+      session.subjectUtterances = [...SPOKEN];
+      await executeTool(session, "verify_subject", VERIFY);
+      await executeTool(session, "record_adverse_event", AE);
+      await executeTool(session, "complete_check_in", {
+        summary: SUMMARY,
+        ended_early: false,
+      });
+      await store.save(session);
+      return session;
+    }
+
+    test("no subject-derived free text survives anywhere in the row", async () => {
+      // Four channels were missed for four sprints because sealRecord is a
+      // per-field list and the list drifted behind the record: the grade
+      // rationale, the escalation reason, and the summary — which is its own
+      // column, sitting beside the record rather than inside it, and is the most
+      // readable single paragraph about a participant in the database.
+      // Completed, not just recorded: the summary is written by
+      // complete_check_in and lives in its own column, and a fixture that never
+      // finishes the call leaves it null — so a test built on one would pass
+      // whether or not the summary is sealed. Confirmed by mutation.
+      const session = await completedCall();
+      await getKeyStore().shredSubject(VERIFY.subject_id, "Retention elapsed.");
+
+      const rows = await raw!.query(
+        `select coalesce(record::text, '') || ' ' || coalesce(summary, '') || ' ' ||
+                coalesce((select string_agg(after_value::text || ' ' || reason, ' ')
+                            from audit_entry where session_id = c.id), '') as everything
+           from check_in_session c where c.id = $1`,
+        [session.id],
+      );
+      const everything: string = rows[0].everything;
+
+      for (const phrase of [
+        AE.verbatim_term,
+        AE.grade_rationale,
+        AE.onset_description,
+        SUMMARY,
+        VERIFY.date_of_birth,
+        ...SPOKEN,
+      ]) {
+        assert.ok(
+          phrase.length < 4 || !everything.includes(phrase),
+          `"${phrase}" survived the shred in the clear`,
+        );
+      }
     });
 
     test("a sealed record reads back exactly as it was written", async () => {

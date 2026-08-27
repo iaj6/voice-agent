@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { reviewAuthorised, reviewRefusal } from "@/lib/review/auth";
 import { getSubjectStore } from "@/lib/store/subjects";
 import { SUBJECTS } from "@/lib/clinical/protocol";
 
@@ -55,7 +56,18 @@ export async function POST(request: Request) {
   return NextResponse.json({ withdrawn: state });
 }
 
+/**
+ * Whether a participant has withdrawn, and the coordinator's note about why.
+ *
+ * Gated, and this one mattered more than the session route: subject ids are
+ * sequential (001-0042), so the whole roster's withdrawal status and the
+ * free-text reason a coordinator typed were enumerable by anyone who could reach
+ * the host. "Withdrew after her husband died" is a sentence that belongs to one
+ * person.
+ */
 export async function GET(request: Request) {
+  if (!reviewAuthorised(request)) return reviewRefusal();
+
   const subjectId = new URL(request.url).searchParams.get("subject_id");
   if (!subjectId) {
     return NextResponse.json({ error: "Missing subject_id" }, { status: 400 });

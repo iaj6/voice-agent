@@ -6,6 +6,7 @@ import {
   snapshot,
 } from "@/lib/store/session";
 import { PROTOCOL } from "@/lib/clinical/protocol";
+import { reviewAuthorised, reviewRefusal } from "@/lib/review/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,6 +105,18 @@ export async function POST(request: Request) {
   });
 }
 
+/**
+ * The whole clinical record for one call.
+ *
+ * Gated, because `snapshot()` carries the subject, every adverse event, the
+ * safety screen, the escalations and the audit trail — the same disclosure
+ * `/api/review/[id]` makes, which is behind a secret. A session id is a UUID and
+ * a UUID is not an access control.
+ *
+ * Synthetic sessions stay open. They are the eval harness's own calls, they
+ * contain no participant, and an attacker cannot mark a real session synthetic —
+ * so this keeps the harness working without keeping the hole open.
+ */
 export async function GET(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) {
@@ -112,6 +125,9 @@ export async function GET(request: Request) {
   const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Unknown session" }, { status: 404 });
+  }
+  if (!session.synthetic && !reviewAuthorised(request)) {
+    return reviewRefusal();
   }
   return NextResponse.json({ session: snapshot(session) });
 }

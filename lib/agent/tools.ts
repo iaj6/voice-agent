@@ -1249,8 +1249,17 @@ const handlers: Record<string, Handler> = {
       entity: "AdverseEvent",
       entityId: eventId,
       before,
-      after: event.seriousness,
-      reason: `Seriousness assessed against 21 CFR 312.32 criteria. Basis: ${String(input.basis ?? "not stated")}`,
+      // The basis moves here because `after` is sealed and `reason` is not.
+      // It is model-authored free text about why an event is serious, and it
+      // quotes the participant readily — "admitted overnight after coughing up
+      // blood". Written into `reason` it sat in plain text in the one table that
+      // rejects UPDATE and DELETE, so destroying the subject's key left it
+      // readable and unerasable. That is the opposite of what crypto-shredding
+      // is for.
+      after: { ...event.seriousness, basis: String(input.basis ?? "not stated") },
+      reason:
+        "Seriousness assessed against 21 CFR 312.32 criteria. The basis is in the " +
+        "sealed value, not here.",
     });
 
     if (!determination.isSerious) {
