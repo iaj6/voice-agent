@@ -249,6 +249,32 @@ function safetyNetSystemMessage(
  * The protocol prompts are verbatim-pinned, so matching the spoken text against
  * them is deterministic and needs nothing from the model.
  */
+/**
+ * Marks a screen item asked when the agent actually speaks its question.
+ *
+ * Nothing checked this. `record_safety_screen_item` accepted an answer for any
+ * item id whether or not the question had ever been put to the participant, and
+ * the only thing standing between that and a falsified screen was the prompt
+ * telling the model not to. Fabricating a screen is the single worst thing this
+ * agent can do — it is why the per-item design exists at all, after a batch tool
+ * call invented answers for questions never asked.
+ *
+ * Deterministic: the screen prompts are verbatim-pinned, so this is a string
+ * match on the agent's own words and needs nothing from the model. The same
+ * technique markSolicitedAsked has used for the lower-stakes solicited list
+ * since sprint 2, which never reached the screen.
+ */
+function markScreenAsked(session: CheckInSession, spoken: string) {
+  if (!spoken) return;
+  const haystack = spoken.toLowerCase();
+  for (const item of PROTOCOL.safetyScreen) {
+    if (session.screenAsked.includes(item.id)) continue;
+    if (haystack.includes(item.prompt.toLowerCase())) {
+      session.screenAsked.push(item.id);
+    }
+  }
+}
+
 function markSolicitedAsked(session: CheckInSession, spoken: string) {
   if (!spoken) return;
   const haystack = spoken.toLowerCase();
@@ -795,6 +821,7 @@ export async function* runTurn(
   }
 
   markSolicitedAsked(session, spokenThisTurn);
+  markScreenAsked(session, spokenThisTurn);
   await saveSession(session);
   yield { type: "state", snapshot: snapshot(session) };
   yield { type: "done", terminal };

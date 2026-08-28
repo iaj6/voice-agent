@@ -1,4 +1,5 @@
 import { emergencyPhrase, speakingRegion } from "@/lib/clinical/locale";
+import { mustRefuseInferredIdentity, NO_CONVERSATION_ID } from "@/lib/telephony/identity";
 import { siteCountryForPrefix } from "@/lib/clinical/protocol";
 
 import { runTurn } from "@/lib/agent/runner";
@@ -145,18 +146,62 @@ function conversationKey(body: ChatCompletionRequest): string | null {
   // under a key that is about to change.
   const firstUser = body.messages?.find((m) => m.role === "user")?.content ?? "";
   if (!firstUser.trim()) return null;
+
+  // **Content is not identity.** Two participants who answer the phone the same
+  // way — "Hello?", "Yes, speaking" — hash to the same key and share a clinical
+  // record. That is the same cross-participant contamination as a drained final
+  // landing in the next call, arriving by a different route, and it is not a
+  // risk a record should carry to make a demo convenient.
+  //
+  // Refused in production. A real integration carries the conversation id
+  // through elevenlabs_extra_body, which the docstring above has said since this
+  // shim was written; requiring it is the difference between saying that and
+  // meaning it. Derivation stays available outside production, where the calls
+  // are the eval harness's own.
+  if (mustRefuseInferredIdentity(body)) return null;
+
   return (
     "derived:" + createHash("sha256").update(firstUser).digest("hex").slice(0, 24)
   );
 }
 
+
+
 /**
- * The session created on an opening turn, waiting to be adopted once the subject
- * speaks and a stable key exists. One slot, because a single shim instance is
- * only ever mid-opening for one conversation at a time; a real deployment
- * carries a conversation id and never needs this.
+ * Sessions created on an opening turn, waiting to be adopted once the subject
+ * speaks and a stable key exists.
+ *
+ * This was a single slot, on the reasoning that a shim instance is only ever
+ * mid-opening for one conversation at a time. Two calls answered within a second
+ * of each other break that: the second overwrites the slot, and the first
+ * conversation adopts the second's session — two participants writing into one
+ * clinical record. A pilot with a handful of participants makes it unlikely and
+ * not impossible, and "unlikely" is not a property a record should rest on.
+ *
+ * Keyed by the opening transcript so two concurrent openings cannot collide
+ * unless their system prompts are identical *and* they arrive together, and
+ * bounded so a process cannot accumulate them.
  */
-let pendingOpeningSessionId: string | null = null;
+const pendingOpenings = new Map<string, { sessionId: string; at: number }>();
+/** An opening nobody adopted within this is abandoned, not reused. */
+const PENDING_TTL_MS = 5 * 60 * 1000;
+
+function openingKey(body: ChatCompletionRequest): string {
+  const system = body.messages?.find((m) => m.role === "system")?.content ?? "";
+  return createHash("sha256").update(system).digest("hex").slice(0, 24);
+}
+
+function takePendingOpening(body: ChatCompletionRequest): string | null {
+  const now = Date.now();
+  for (const [k, v] of pendingOpenings) {
+    if (now - v.at > PENDING_TTL_MS) pendingOpenings.delete(k);
+  }
+  const key = openingKey(body);
+  const found = pendingOpenings.get(key);
+  if (!found) return null;
+  pendingOpenings.delete(key);
+  return found.sessionId;
+}
 
 /** Bounded so a long-lived process cannot accumulate keys without limit. */
 const MAX_TRACKED_CONVERSATIONS = 500;
@@ -177,7 +222,7 @@ async function resolveSession(
   // Opening turn: no stable key yet. Create and park it.
   if (key === null) {
     const created = await createSession();
-    pendingOpeningSessionId = created.id;
+    pendingOpenings.set(openingKey(body), { sessionId: created.id, at: Date.now() });
     return created;
   }
 
@@ -189,9 +234,9 @@ async function resolveSession(
 
   // First real utterance: adopt the session opened a moment ago rather than
   // starting a second one and stranding the greeting.
-  if (pendingOpeningSessionId) {
-    const adopted = await getSession(pendingOpeningSessionId);
-    pendingOpeningSessionId = null;
+  const pending = takePendingOpening(body);
+  if (pending) {
+    const adopted = await getSession(pending);
     if (adopted) {
       rememberConversation(key, adopted.id);
       return adopted;
@@ -240,6 +285,15 @@ export async function POST(request: Request) {
   }
 
   await logPayload("chat.completions", body);
+
+  if (mustRefuseInferredIdentity(body)) {
+    // Refused rather than guessed. Inferring which call this is from what the
+    // caller said means two people who answer the phone alike share a record.
+    return Response.json(
+      { error: NO_CONVERSATION_ID },
+      { status: 400 },
+    );
+  }
 
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const lastUser = [...messages].reverse().find((m) => m.role === "user");

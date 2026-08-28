@@ -104,6 +104,7 @@ interface StoredRecord {
   conMeds: CheckInSession["conMeds"];
   escalations: CheckInSession["escalations"];
   solicitedReviewed: CheckInSession["solicitedReviewed"];
+  screenAsked: CheckInSession["screenAsked"];
   subject: CheckInSession["subject"];
   verificationAttempts: number;
   subjectUtterances: string[];
@@ -246,6 +247,7 @@ function toRecord(session: CheckInSession): StoredRecord {
     conMeds: session.conMeds,
     escalations: session.escalations,
     solicitedReviewed: session.solicitedReviewed,
+    screenAsked: session.screenAsked,
     subject: session.subject,
     verificationAttempts: session.verificationAttempts,
     subjectUtterances: session.subjectUtterances,
@@ -275,6 +277,7 @@ function blankSession(id: string): CheckInSession {
     conMeds: [],
     escalations: [],
     solicitedReviewed: [],
+    screenAsked: [],
     summary: null,
     completedAt: null,
     shredded: false,
@@ -583,6 +586,7 @@ class PostgresSessionStore implements SessionStore {
       conMeds: record.conMeds ?? [],
       escalations: record.escalations ?? [],
       solicitedReviewed: record.solicitedReviewed ?? [],
+      screenAsked: record.screenAsked ?? [],
       summary: unsealSummary((row.summary as string | null) ?? null, key),
       completedAt: row.completed_at
         ? new Date(row.completed_at as string).toISOString()

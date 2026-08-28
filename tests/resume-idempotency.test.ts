@@ -9,7 +9,7 @@ import {
   RESUME_WINDOW_MS,
 } from "../lib/store/session-store.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
-import { SUBJECTS } from "../lib/clinical/protocol.ts";
+import { SUBJECTS, PROTOCOL } from "../lib/clinical/protocol.ts";
 
 /** Forces the in-memory store so these run without a database. */
 beforeEach(() => {
@@ -261,6 +261,7 @@ test("the carried record does not share structure with the closed one", async ()
   // matching audit entry, because the carried objects were the same objects.
   const first = await callWith(SPOKEN);
   await executeTool(first, "verify_subject", VERIFY);
+  first.screenAsked = PROTOCOL.safetyScreen.map((i) => i.id);
   await executeTool(first, "record_safety_screen_item", {
     item_id: "fever",
     answer: false,
@@ -270,6 +271,7 @@ test("the carried record does not share structure with the closed one", async ()
 
   const second = await callWith(SPOKEN);
   await executeTool(second, "verify_subject", VERIFY);
+  second.screenAsked = PROTOCOL.safetyScreen.map((i) => i.id);
   await executeTool(second, "record_safety_screen_item", {
     item_id: "chest_or_breathing",
     answer: true,
@@ -289,6 +291,7 @@ test("the resume payload names what was answered, not just how many", async () =
   // guessing protocol order skips a red-flag item that was never asked.
   const first = await callWith(SPOKEN);
   await executeTool(first, "verify_subject", VERIFY);
+  first.screenAsked = PROTOCOL.safetyScreen.map((i) => i.id);
   await executeTool(first, "record_safety_screen_item", {
     item_id: "fever",
     answer: false,

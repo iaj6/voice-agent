@@ -43,6 +43,9 @@ function session(utterances: string[]): CheckInSession {
     conMeds: [],
     escalations: [],
     solicitedReviewed: [],
+    // The runner marks these when the agent speaks each question. These
+    // fixtures start past that point; the guard itself is tested separately.
+    screenAsked: PROTOCOL.safetyScreen.map((i) => i.id),
     summary: null,
     completedAt: null,
     shredded: false,
@@ -422,5 +425,44 @@ test("a serious determination pages somebody on its own", async () => {
   const attempts = await getDeliveryStore().forSession(ID);
   assert.equal(attempts.length, 1, "a serious grade 2 event paged nobody");
   assert.equal(attempts[0].urgency, "urgent");
+  __setDeliveryStore(null);
+});
+
+test("an answer cannot be recorded for a question the participant never heard", async () => {
+  // Fabricating a screen is the worst thing this agent can do, and it is why the
+  // per-item design exists at all — a batch tool call once invented answers for
+  // questions never asked. The prompt told the model to ask each item first and
+  // nothing enforced it.
+  __setDeliveryStore(null);
+  const s = session(["Yes."]);
+  s.screenAsked = []; // nothing spoken yet
+
+  const out = await executeTool(s, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: true,
+    verbatim: null,
+  });
+
+  assert.equal(out.isError, true, "an unasked item was recorded");
+  assert.match(String((out.result as Record<string, unknown>).error), /has not been asked/);
+  assert.equal(s.safetyScreen as unknown, null, "nothing was written");
+  assert.equal(
+    (await getDeliveryStore().forSession(ID)).length,
+    0,
+    "a fabricated answer paged a coordinator",
+  );
+
+  // And once the agent has actually asked it, the same call succeeds.
+  s.screenAsked = ["fever"];
+  const asked = await executeTool(s, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: true,
+    verbatim: null,
+  });
+  assert.notEqual(
+    String((asked.result as Record<string, unknown>).error ?? ""),
+    "has not been asked",
+  );
+  assert.equal(s.safetyScreen?.items.length, 1, "a genuinely asked item was refused");
   __setDeliveryStore(null);
 });

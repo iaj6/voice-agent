@@ -115,6 +115,16 @@ export interface CheckInSession {
   conMeds: ConMedRecord[];
   escalations: EscalationRecord[];
   solicitedReviewed: string[];
+  /**
+   * Screen item ids whose question the agent has actually spoken.
+   *
+   * Recorded from the agent's own words, not from the model saying it asked. The
+   * protocol prompts are verbatim-pinned, so matching is deterministic and needs
+   * nothing from the model — the same technique `markSolicitedAsked` has used
+   * for the lower-stakes solicited list since sprint 2, which never reached the
+   * screen.
+   */
+  screenAsked: string[];
   summary: string | null;
   completedAt: string | null;
   /**

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { executeTool } from "../lib/agent/tools.ts";
 import { AuditTrail } from "../lib/store/audit.ts";
-import { SUBJECTS } from "../lib/clinical/protocol.ts";
+import { SUBJECTS, PROTOCOL } from "../lib/clinical/protocol.ts";
 import { getDeliveryStore, __setDeliveryStore } from "../lib/store/deliveries.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
@@ -30,6 +30,9 @@ function sessionWith(utterances: string[]): CheckInSession {
     conMeds: [],
     escalations: [],
     solicitedReviewed: [],
+    // The runner marks these when the agent speaks each question. These
+    // fixtures start past that point; the guard itself is tested separately.
+    screenAsked: PROTOCOL.safetyScreen.map((i) => i.id),
     summary: null,
     completedAt: null,
   shredded: false,

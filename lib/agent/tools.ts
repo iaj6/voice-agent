@@ -956,6 +956,31 @@ const handlers: Record<string, Handler> = {
       };
     }
 
+    // Refused when the question was never spoken.
+    //
+    // The prompt tells the model to ask each item exactly as written and record
+    // it afterwards, and nothing enforced that — so an answer could be recorded
+    // for a question the participant never heard. That is data falsification,
+    // and it is the exact failure the per-item design was built for after a
+    // batch tool call invented answers for unasked questions.
+    //
+    // Deterministic and independent of model judgment: the runner records which
+    // prompts the agent actually spoke, matched verbatim against the protocol.
+    if (!session.screenAsked.includes(itemId)) {
+      return {
+        result: {
+          error:
+            `Screen item ${itemId} has not been asked yet. Say its question ` +
+            "exactly as written, wait for the answer, and record it then. An " +
+            "answer to a question the subject never heard is not a record.",
+          items_remaining: PROTOCOL.safetyScreen
+            .filter((i) => !session.safetyScreen?.items.some((x) => x.itemId === i.id))
+            .map((i) => i.id),
+        },
+        isError: true,
+      };
+    }
+
     // The quote is screened; the ANSWER is not discarded with it. A red-flag
     // "yes" is the field with a reporting clock attached.
     const screenedVerbatim = await screenQuote(
