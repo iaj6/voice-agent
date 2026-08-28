@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/store/session";
+import { getSession, looksLikeSessionId } from "@/lib/store/session";
 import { getLatencyStore, plausible } from "@/lib/store/latency";
 
 export const runtime = "nodejs";
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   // column, so a malformed id throws out of the driver as an unhandled 500. This
   // route is unauthenticated and takes the id straight from the body, so it is
   // trivially reachable here.
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+  if (!looksLikeSessionId(sessionId)) {
     return Response.json({ error: "Unknown session" }, { status: 404 });
   }
 

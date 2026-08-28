@@ -366,6 +366,22 @@ class MemorySessionStore implements SessionStore {
       await getKeyStore().bindSubject(session.id, session.subject.subjectId);
     }
     session.updatedAt = new Date().toISOString();
+
+    // Merge the trail rather than replace it.
+    //
+    // appendAudit was rebased and save() was not, so another writer's entry —
+    // a coordinator's acknowledgement, landing between two turns — was written,
+    // then silently overwritten by the next save. The chain still verified,
+    // because it was internally consistent; it was just missing the only human
+    // action in the call. That is the hole this was supposed to close, one
+    // method along.
+    const priorTrail = this.sessions.get(session.id);
+    if (priorTrail) {
+      const persisted = priorTrail.audit.all().map((e) => ({ ...e }));
+      const persistedHashes = new Set(persisted.map((e) => e.hash));
+      session.audit.rebaseOnto(persisted, persistedHashes);
+    }
+
     this.sessions.set(session.id, detach(session, key));
   }
 
@@ -767,9 +783,10 @@ class PostgresSessionStore implements SessionStore {
    * A lost audit entry is the failure an audit trail exists to prevent, and
    * 21 CFR 11.10(e) asks for a record of operator actions that does not obscure
    * previously recorded information. Losing one silently obscures it entirely.
-   * So divergence throws: an error is recoverable, a hole is not.
+   * So divergence rebases rather than dropping or throwing — see the comment on
+   * the rebase below for why throwing was worse than the bug it replaced.
    */
-  async appendAudit(session: CheckInSession): Promise<void> {
+  async appendAudit(session: CheckInSession, retrying = false): Promise<void> {
     const sql = getDb();
     const rows = (await sql`
       select seq, recorded_at, actor, action, entity, entity_id,
@@ -780,7 +797,17 @@ class PostgresSessionStore implements SessionStore {
     const persisted: AuditEntry[] = rows.map((r) => ({
       sessionId: session.id,
       seq: Number(r.seq),
-      timestamp: new Date(String(r.recorded_at)).toISOString(),
+      // `new Date(String(date))` drops the milliseconds — pg hands back a Date
+      // object and String() renders it as "Thu Aug 28 2026 …" with none. The
+      // rebase then puts these mangled entries onto the live trail keeping their
+      // original hashes, so from the second save of every real call the chain
+      // reported itself broken: streamed to the browser, rendered as a
+      // broken-chain alarm, logged. The stored chain was always fine.
+      //
+      // The sibling mapping in get() has always used this form. The eval suite
+      // asserts on chain validity and stayed green because it runs against the
+      // memory store — the same divergence that hid the audit drop.
+      timestamp: new Date(r.recorded_at as string | Date).toISOString(),
       actor: r.actor as AuditEntry["actor"],
       action: String(r.action),
       entity: String(r.entity),
@@ -823,9 +850,31 @@ class PostgresSessionStore implements SessionStore {
              ${e.entity}, ${e.entityId},
              ${e.before === null ? null : JSON.stringify(e.before)}::jsonb,
              ${e.after === null ? null : JSON.stringify(e.after)}::jsonb,
-             ${e.reason}, ${e.prevHash}, ${e.hash})`,
+             ${e.reason}, ${e.prevHash}, ${e.hash})
+          on conflict (session_id, seq) do nothing`,
       ),
     );
+
+    // `do nothing` rather than letting the primary key throw. The read and the
+    // insert are not serialized, so two writers can rebase onto the same seq and
+    // the loser would raise a raw driver error out of saveSession — which the
+    // runner does not guard, which is the "turn fails for the participant"
+    // outcome this rebase replaced, back with a narrower window.
+    //
+    // Skipping the row is not enough on its own: the entry is still unwritten.
+    // Re-reading tells us whether it landed, and one retry rebases it onto
+    // whatever the winner wrote. Bounded to one, because a second collision on
+    // the same session means something other than a race.
+    if (!retrying) {
+      const after = (await sql`
+        select hash from audit_entry where session_id = ${session.id}`) as {
+        hash: string;
+      }[];
+      const landed = new Set(after.map((r) => r.hash));
+      if (pending.some((e) => !landed.has(e.hash))) {
+        await this.appendAudit(session, true);
+      }
+    }
   }
 }
 

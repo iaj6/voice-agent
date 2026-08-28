@@ -6,7 +6,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PROTOCOL } from "../lib/clinical/protocol.ts";
 import {
+  aliasesFor,
   MATCH_WINDOW_DAYS,
   reconcile,
   sameSymptom,
@@ -154,4 +156,19 @@ test("the csv survives a verbatim quote containing a comma and a quote mark", ()
   const csv = toCsv(rows);
   assert.equal(csv.split("\n").length, 2, "one header, one row");
   assert.ok(csv.includes('"it was ""bad"", really bad"'));
+});
+
+test("every protocol symptom has words a participant would actually use", () => {
+  // aliasesFor cannot invent them. Two versions of a protocol loop tried and both
+  // were no-ops; the honest version of the property is this assertion, so adding
+  // a symptom to the study without its everyday words fails here rather than
+  // quietly turning every eDiary row for it into a disagreement.
+  const missing = PROTOCOL.solicitedSymptoms
+    .filter((s) => aliasesFor(s.term).size <= 1)
+    .map((s) => s.term);
+  assert.deepEqual(
+    missing,
+    [],
+    `no everyday words for: ${missing.join(", ")} — add them to EVERYDAY in reconcile.ts`,
+  );
 });

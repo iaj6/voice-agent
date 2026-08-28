@@ -195,14 +195,6 @@ export class AuditTrail {
   }
 
   /**
-   * Rebuilds a trail from persisted entries.
-   *
-   * Does not re-verify on load — call verifyChain() for that. Rehydrating and
-   * verifying are separate on purpose: a trail that fails verification still
-   * needs to be loadable, because the broken chain is itself the finding and
-   * hiding it behind a constructor error would lose it.
-   */
-  /**
    * Re-sequences this process's unwritten entries onto a trail somebody else
    * extended, and returns the ones to insert.
    *
@@ -238,6 +230,14 @@ export class AuditTrail {
     return rebased;
   }
 
+  /**
+   * Rebuilds a trail from persisted entries.
+   *
+   * Does not re-verify on load — call verifyChain() for that. Rehydrating and
+   * verifying are separate on purpose: a trail that fails verification still
+   * needs to be loadable, because the broken chain is itself the finding and
+   * hiding it behind a constructor error would lose it.
+   */
   static rehydrate(sessionId: string, entries: AuditEntry[]): AuditTrail {
     const trail = new AuditTrail(sessionId);
     trail.entries = [...entries].sort((a, b) => a.seq - b.seq);

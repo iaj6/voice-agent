@@ -178,6 +178,21 @@ export class ServiceClosedError extends Error {
   }
 }
 
+/**
+ * Whether a string can be a session id at all.
+ *
+ * `check_in_session.id` is a uuid column, so a malformed id throws "invalid
+ * input syntax for type uuid" out of the driver as an unhandled 500 rather than
+ * reaching a 404. Three routes take an id straight from a request body or path
+ * and two of them are unauthenticated, so this was about to be copied a third
+ * time.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function looksLikeSessionId(id: unknown): id is string {
+  return typeof id === "string" && UUID.test(id);
+}
+
 export async function createSession(
   options: { resumable?: boolean; synthetic?: boolean } = {},
 ): Promise<CheckInSession> {

@@ -22,7 +22,6 @@
  * refuses to call an unmatched row a miss.
  */
 
-import { PROTOCOL } from "../clinical/protocol.ts";
 import type { CtcaeGrade } from "../clinical/safety.ts";
 
 /** One row of whatever the site can export from its eDiary. */
@@ -124,20 +123,17 @@ export function aliasesFor(term: string): Set<string> {
     if (family.includes(key)) family.forEach((t) => group.add(t));
   }
 
-  // A protocol term and its everyday words are the same symptom, keyed either
-  // way round. The previous version of this loop added `normalise(symptom.term)`
-  // only when it already equalled `key` — which line 1 had added — so it did
-  // nothing at all, and the property it claimed (a study that adds a symptom does
-  // not silently stop reconciling) was not delivered. A new protocol symptom
-  // absent from EVERYDAY still gets no aliases; what this fixes is the case where
-  // the participant's word is the key and the coded term is not, or vice versa.
-  for (const symptom of PROTOCOL.solicitedSymptoms) {
-    const coded = normalise(symptom.term);
-    const everyday = EVERYDAY[coded];
-    if (!everyday) continue;
-    const family = [coded, ...everyday.map(normalise)];
-    if (family.includes(key)) family.forEach((t) => group.add(t));
-  }
+  // No protocol loop here. There were two versions of one, and both were
+  // provably no-ops — the loop above already walks every EVERYDAY entry, so by
+  // the time a protocol term could match, its family was already added. What
+  // neither version delivered is the property they claimed: a symptom added to
+  // the study with no everyday words gets no aliases at all, and every eDiary
+  // row for it lands as a disagreement.
+  //
+  // That gap is real and cannot be closed by code — somebody has to write down
+  // what participants call the thing. So it is made loud instead: a test asserts
+  // every protocol symptom has an entry in EVERYDAY, and adding one without it
+  // fails the suite rather than quietly degrading the reconciliation.
   return group;
 }
 

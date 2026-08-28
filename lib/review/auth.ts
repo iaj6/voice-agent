@@ -61,14 +61,23 @@ export function reviewAuthorised(request: Request): boolean {
   // Bearer for a script, cookie for the page. Both are the same secret; the
   // cookie exists because a browser cannot attach a header to a navigation.
   //
-  // Only treated as a credential when it actually is one. `replace(/^Bearer /)`
-  // left any other scheme intact and then short-circuited the cookie, so a
-  // coordinator behind a gateway that injects its own Authorization header was
-  // locked out with a perfectly good cookie and a bare 401.
-  const header = request.headers.get("authorization");
-  const bearer = header?.startsWith("Bearer ") ? header.slice(7) : null;
-  const offered = bearer || fromCookie(request);
-  return typeof offered === "string" && offered.length > 0 && matches(offered, expected);
+  // Either may satisfy it, and neither shadows the other.
+  //
+  // The first version short-circuited on any Authorization header, so a
+  // coordinator behind a gateway was locked out with a perfectly good cookie.
+  // The second only accepted `Bearer ` — which is exactly what such a gateway
+  // injects (an OIDC token), so the same coordinator was locked out by the fix
+  // for being locked out. Scheme matching is also case-insensitive per RFC 7235,
+  // which the second version got wrong too.
+  const header = request.headers.get("authorization") ?? "";
+  const bearer = /^bearer\s+/i.test(header) ? header.replace(/^bearer\s+/i, "") : null;
+
+  for (const offered of [bearer, fromCookie(request)]) {
+    if (typeof offered === "string" && offered.length > 0 && matches(offered, expected)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** The refusal, worded so an operator knows which of the two problems they have. */

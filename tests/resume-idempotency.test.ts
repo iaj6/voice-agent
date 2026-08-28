@@ -613,3 +613,35 @@ test("a no-to-yes screen correction survives a redial", async () => {
     "the correction did not land",
   );
 });
+
+test("an asked-but-unanswered item is not carried forward as asked", async () => {
+  // screenAsked records that the agent *spoke* the prompt, not that anyone
+  // answered. Carrying it forward wholesale meant a call that dropped between
+  // the question and the answer let the successor record an answer the
+  // participant never gave — a red-flag screen item made from nothing, which is
+  // the fabrication this gate exists to stop, reintroduced by the fix for a
+  // different hole in it.
+  const first = await callWith(SPOKEN);
+  await executeTool(first, "verify_subject", VERIFY);
+  // Asked, and the call drops before the subject says anything.
+  first.screenAsked = ["bleeding_or_fainting"];
+  await markAsDropped(first);
+
+  const second = await callWith(SPOKEN);
+  await executeTool(second, "verify_subject", VERIFY);
+  assert.ok(
+    !second.screenAsked.includes("bleeding_or_fainting"),
+    "an unanswered question was carried forward as though it had been put",
+  );
+
+  const fabricated = await executeTool(second, "record_safety_screen_item", {
+    item_id: "bleeding_or_fainting",
+    answer: true,
+    verbatim: null,
+  });
+  assert.equal(fabricated.isError, true, "an answer nobody gave was accepted");
+  assert.match(
+    String((fabricated.result as Record<string, unknown>).error),
+    /has not been asked/,
+  );
+});

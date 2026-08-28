@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/store/session";
+import { getSession, looksLikeSessionId } from "@/lib/store/session";
 import { getLatencyStore } from "@/lib/store/latency";
 import { getDeliveryStore } from "@/lib/store/deliveries";
 import { reasonsFor } from "@/lib/review/queue";
@@ -32,7 +32,7 @@ export async function GET(
   // Checked before the lookup: `check_in_session.id` is a uuid column, so a
   // truncated or mistyped deep link threw "invalid input syntax for type uuid"
   // out of the driver as an unhandled 500 rather than reaching the 404 below.
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+  if (!looksLikeSessionId(id)) {
     return Response.json({ error: "Unknown call" }, { status: 404 });
   }
   const session = await getSession(id);

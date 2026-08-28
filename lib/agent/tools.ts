@@ -687,7 +687,25 @@ async function resumeDroppedCall(
   // comment on the escalation gate below calls "the single most important
   // correction they can make". The gate added to stop fabrication would have
   // blocked the one answer that matters most.
-  session.screenAsked = [...new Set([...prior.screenAsked, ...session.screenAsked])];
+  //
+  // Intersected with what was actually *answered*, not everything that was
+  // asked. `screenAsked` records that the agent spoke the prompt; a call that
+  // drops between the question and the answer would otherwise carry the item
+  // forward as asked, and the successor's gate would then accept an answer the
+  // participant never gave — while the resume payload steers the model to "pick
+  // up at the first unanswered item". A red-flag screen item recorded from
+  // nothing is the fabrication this gate exists to stop, reintroduced by the fix
+  // for a different hole in it. The correction case only needs items that were
+  // both asked and answered.
+  const priorAnswered = new Set(
+    (prior.safetyScreen?.items ?? []).map((i) => i.itemId),
+  );
+  session.screenAsked = [
+    ...new Set([
+      ...prior.screenAsked.filter((id) => priorAnswered.has(id)),
+      ...session.screenAsked,
+    ]),
+  ];
   session.solicitedReviewed = [
     ...new Set([...prior.solicitedReviewed, ...session.solicitedReviewed]),
   ];

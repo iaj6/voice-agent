@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/store/session";
+import { getSession, looksLikeSessionId } from "@/lib/store/session";
 import { runTurn } from "@/lib/agent/runner";
 import { getLatencyStore } from "@/lib/store/latency";
 
@@ -24,6 +24,11 @@ export async function POST(request: Request) {
   const { sessionId, utterance, source = "subject" } = body;
   if (!sessionId) {
     return Response.json({ error: "Missing sessionId" }, { status: 400 });
+  }
+  // Same guard as the other id-taking routes: a malformed id throws the uuid
+  // cast out of the driver as an unhandled 500 before reaching the 404 below.
+  if (!looksLikeSessionId(sessionId)) {
+    return Response.json({ error: "Unknown session. Start a new call." }, { status: 404 });
   }
   if (typeof utterance !== "string" || utterance.trim().length === 0) {
     return Response.json({ error: "Missing utterance" }, { status: 400 });
@@ -88,13 +93,22 @@ export async function POST(request: Request) {
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
-        // Never at the cost of the turn — including its latency. This was
-        // awaited between the last event and [DONE], so every turn paid a
-        // database round trip before the client could set itself back to
-        // listening: observability on the critical path of the thing it
-        // measures. Fire and forget, and swallow, because a metrics write that
-        // throws would turn a reporting feature into an outage on a live call.
-        void getLatencyStore()
+        // Off the critical path, but not abandoned.
+        //
+        // Awaiting it put a database round trip between the last event and
+        // [DONE], so every turn paid for it before the client could listen
+        // again — observability on the critical path of the thing it measures.
+        // A bare `void` was the first fix and traded that for a worse one: once
+        // the response completes the function can be frozen or torn down, and
+        // the rows most likely to still be in flight are the slow turns, so
+        // N-01 would have lost exactly the measurements that matter, silently
+        // and in the flattering direction.
+        //
+        // So: sent after [DONE] and the close, and awaited. The client already
+        // has everything it needs and is not waiting on this, while the handler
+        // is still executing — which is a weaker guarantee than waitUntil and
+        // needs no dependency. Recorded as 4.11.
+        const write = getLatencyStore()
           .record({
             sessionId: session.id,
             turnIndex,
@@ -107,8 +121,10 @@ export async function POST(request: Request) {
           .catch(() => {
             /* observability is not worth a dropped turn */
           });
+
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
+        await write;
       }
     },
   });

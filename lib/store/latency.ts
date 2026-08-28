@@ -112,11 +112,14 @@ class MemoryLatencyStore implements LatencyStore {
   }
 
   async recent(limit = 2000): Promise<TurnLatency[]> {
-    // By createdAt, not insertion order. record() merges in place, so a row
-    // created early and filled in later kept its original position — and with
-    // --limit set, latency.mjs dropped the most recently completed turns while
-    // keeping stale ones. The Postgres store orders by created_at desc, and two
-    // backends disagreeing about what a query means is its own defect class.
+    // By createdAt, matching the Postgres store's `order by created_at desc`.
+    //
+    // An earlier comment here claimed this fixed a divergence. It did not: both
+    // backends keep the row's original createdAt when the second writer fills in
+    // its half, so insertion order and createdAt order are the same sequence and
+    // always were. The sort is kept because it states the intent explicitly
+    // rather than relying on array position — a turn's place in the window is
+    // when the participant waited, not when its last field happened to land.
     return [...this.rows]
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
       .slice(0, limit);
