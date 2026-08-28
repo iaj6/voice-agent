@@ -14,27 +14,6 @@ import type { CheckInSession } from "./session.ts";
  * speed — it is that a process restart mid-call currently loses a reported
  * adverse event, which is unacceptable rather than inconvenient.
  */
-/**
- * Two writers minted the same audit sequence number for different actions.
- *
- * Raised rather than swallowed, because the alternative is a record of what the
- * system did with a hole in it that nothing reports.
- */
-export class AuditDivergenceError extends Error {
-  readonly sessionId: string;
-  readonly seq: number;
-  constructor(sessionId: string, seq: number) {
-    super(
-      `Audit entry ${seq} for session ${sessionId} already exists with different ` +
-        "content. Two writers diverged and one entry would have been lost, so " +
-        "nothing was written. Reload the session and retry the action.",
-    );
-    this.name = "AuditDivergenceError";
-    this.sessionId = sessionId;
-    this.seq = seq;
-  }
-}
-
 export interface SessionStore {
   readonly kind: "memory" | "postgres";
   create(): Promise<CheckInSession>;
@@ -443,11 +422,17 @@ class MemorySessionStore implements SessionStore {
   async appendAudit(session: CheckInSession): Promise<void> {
     const stored = this.sessions.get(session.id);
     if (!stored) return;
-    const known = new Set(stored.audit.all().map((e) => e.seq));
-    const merged = [
-      ...stored.audit.all().map((e) => ({ ...e })),
-      ...session.audit.all().filter((e) => !known.has(e.seq)).map((e) => ({ ...e })),
-    ];
+
+    // Rebased on hash, not filtered on sequence number — the same defect the
+    // Postgres store had, and the same fix. Two writers holding one session both
+    // mint the same next seq, and dropping the loser leaves a hole in the record
+    // of what happened to it. This backend is what most of the suite runs
+    // against, so a divergence between the two is a divergence between what the
+    // tests prove and what production does.
+    const persisted = stored.audit.all().map((e) => ({ ...e }));
+    const persistedHashes = new Set(persisted.map((e) => e.hash));
+    const rebased = session.audit.rebaseOnto(persisted, persistedHashes);
+    const merged = [...persisted, ...rebased];
     this.sessions.set(session.id, {
       ...stored,
       // Re-armed, like detach() and the Postgres store. Every other write path
@@ -786,25 +771,46 @@ class PostgresSessionStore implements SessionStore {
    */
   async appendAudit(session: CheckInSession): Promise<void> {
     const sql = getDb();
-    const stored = (await sql`
-      select seq, hash from audit_entry where session_id = ${session.id}
-      order by seq asc`) as { seq: number; hash: string }[];
+    const rows = (await sql`
+      select seq, recorded_at, actor, action, entity, entity_id,
+             before_value, after_value, reason, prev_hash, hash
+        from audit_entry where session_id = ${session.id}
+       order by seq asc`) as Record<string, unknown>[];
 
-    const high = stored.length === 0 ? 0 : Number(stored[stored.length - 1].seq);
-    const bySeq = new Map(stored.map((r) => [Number(r.seq), r.hash]));
-    const mine = session.audit.all();
+    const persisted: AuditEntry[] = rows.map((r) => ({
+      sessionId: session.id,
+      seq: Number(r.seq),
+      timestamp: new Date(String(r.recorded_at)).toISOString(),
+      actor: r.actor as AuditEntry["actor"],
+      action: String(r.action),
+      entity: String(r.entity),
+      entityId: (r.entity_id as string | null) ?? null,
+      before: r.before_value ?? null,
+      after: r.after_value ?? null,
+      reason: String(r.reason),
+      prevHash: String(r.prev_hash),
+      hash: String(r.hash),
+    }));
 
-    // Same sequence number, different content: two trails diverged and one of
-    // them is about to disappear.
-    for (const entry of mine) {
-      const persisted = bySeq.get(entry.seq);
-      if (persisted !== undefined && persisted !== entry.hash) {
-        throw new AuditDivergenceError(session.id, entry.seq);
-      }
-    }
+    const persistedHashes = new Set(persisted.map((e) => e.hash));
+    const unwritten = session.audit.all().filter((e) => !persistedHashes.has(e.hash));
+    if (unwritten.length === 0) return;
 
-    const pending = mine.filter((e) => e.seq > high);
-    if (pending.length === 0) return;
+    // Rebased rather than dropped or thrown.
+    //
+    // Two writers holding one session is ordinary — a coordinator acknowledging
+    // an escalation while the call is still running is the case that forced
+    // this — and both mint the same next sequence number. Dropping one silently
+    // leaves a hole in the record, which is what this did originally. Throwing
+    // was the fix, and it was worse: an ordinary race became a turn that failed
+    // for the participant and kept failing for the rest of the call, because the
+    // conflicting entry stayed in memory and every later save hit it again.
+    //
+    // Keeping both and renumbering ours after theirs is the only option that
+    // loses nothing. Hashes survive the round trip through JSONB because
+    // canonicalize sorts keys — the property audit.ts established for exactly
+    // this kind of reason.
+    const pending = session.audit.rebaseOnto(persisted, persistedHashes);
 
     await sql.transaction(
       pending.map(

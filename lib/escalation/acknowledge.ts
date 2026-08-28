@@ -23,7 +23,15 @@ export async function noteAcknowledgement(
   record: DeliveryRecord,
   by: string,
 ): Promise<{ recorded: boolean; detail: string | null }> {
-  const session = await getSession(record.sessionId);
+  let session: Awaited<ReturnType<typeof getSession>>;
+  try {
+    // Inside the guard, not outside it. The acknowledgement has already been
+    // committed by the time this runs, so a read failure escaping as a 500 tells
+    // the coordinator their action failed when it succeeded — and they resubmit.
+    session = await getSession(record.sessionId);
+  } catch {
+    return { recorded: false, detail: "the call record could not be read" };
+  }
   if (!session) {
     return { recorded: false, detail: "the call this escalation belongs to is gone" };
   }
@@ -58,9 +66,10 @@ export async function noteAcknowledgement(
     // escalation a human has actually taken. But a trail with a hole in it is
     // the thing this file exists to prevent, so it is reported rather than
     // swallowed, and the caller says so on the page.
-    return {
-      recorded: false,
-      detail: err instanceof Error ? err.message : String(err),
-    };
+    // Deliberately not the driver's message. This is rendered on a page anyone
+    // holding the acknowledgement token can reach, and a raw database error is
+    // schema detail on a public surface.
+    console.error("[ack] audit trail write failed", err);
+    return { recorded: false, detail: "the audit trail write did not complete" };
   }
 }

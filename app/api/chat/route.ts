@@ -88,10 +88,14 @@ export async function POST(request: Request) {
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
-        // Never at the cost of the turn. A metrics write that throws would turn
-        // an observability feature into an outage on the call path.
-        try {
-          await getLatencyStore().record({
+        // Never at the cost of the turn — including its latency. This was
+        // awaited between the last event and [DONE], so every turn paid a
+        // database round trip before the client could set itself back to
+        // listening: observability on the critical path of the thing it
+        // measures. Fire and forget, and swallow, because a metrics write that
+        // throws would turn a reporting feature into an outage on a live call.
+        void getLatencyStore()
+          .record({
             sessionId: session.id,
             turnIndex,
             source: source === "system" ? "system" : "subject",
@@ -99,10 +103,10 @@ export async function POST(request: Request) {
             firstSentenceMs,
             totalMs: Date.now() - startedAt,
             spokeBeforeTools,
+          })
+          .catch(() => {
+            /* observability is not worth a dropped turn */
           });
-        } catch {
-          /* observability is not worth a dropped turn */
-        }
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       }

@@ -573,3 +573,43 @@ test("a medication re-reported on a redial keeps its first capture time", async 
     "re-reporting moved the capture time forward, losing when it entered the record",
   );
 });
+
+test("a no-to-yes screen correction survives a redial", async () => {
+  // The screen gate refuses an answer for a question that was never asked, and a
+  // successor session starts with nothing asked. Without carrying screenAsked
+  // forward, a subject who answered "no" on the dropped call and corrects to
+  // "yes" on the redial is refused — the single most important correction they
+  // can make, blocked by the guard added to stop fabrication.
+  const first = await callWith(SPOKEN);
+  await executeTool(first, "verify_subject", VERIFY);
+  first.screenAsked = ["chest_or_breathing"];
+  await executeTool(first, "record_safety_screen_item", {
+    item_id: "chest_or_breathing",
+    answer: false,
+    verbatim: null,
+  });
+  await markAsDropped(first);
+
+  // The redial: the agent has not re-asked anything yet.
+  const second = await callWith(SPOKEN);
+  await executeTool(second, "verify_subject", VERIFY);
+  assert.ok(
+    second.screenAsked.includes("chest_or_breathing"),
+    "the redial forgot which questions had already been put to the subject",
+  );
+
+  const corrected = await executeTool(second, "record_safety_screen_item", {
+    item_id: "chest_or_breathing",
+    answer: true,
+    verbatim: null,
+  });
+  assert.ok(
+    !/has not been asked/.test(String((corrected.result as Record<string, unknown>).error ?? "")),
+    "the correction was refused on the redial",
+  );
+  assert.equal(
+    second.safetyScreen?.items.find((i) => i.itemId === "chest_or_breathing")?.answer,
+    true,
+    "the correction did not land",
+  );
+});

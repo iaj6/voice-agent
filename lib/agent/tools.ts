@@ -632,6 +632,7 @@ async function resumeDroppedCall(
     conMeds: structuredClone(session.conMeds),
     escalations: structuredClone(session.escalations),
     solicitedReviewed: [...session.solicitedReviewed],
+    screenAsked: [...session.screenAsked],
     subjectUtterances: [...session.subjectUtterances],
     provenanceRejections: session.provenanceRejections,
     refusedQuotes: [...session.refusedQuotes],
@@ -678,6 +679,15 @@ async function resumeDroppedCall(
     med.id = nextConMedId(session);
     session.conMeds.push(med);
   }
+  // Carried alongside solicitedReviewed, because the screen gate reads it.
+  //
+  // Without this, a call that drops mid-screen and redials starts with an empty
+  // screenAsked, and record_safety_screen_item refuses every item the successor
+  // has not re-asked — including a subject correcting "no" to "yes", which the
+  // comment on the escalation gate below calls "the single most important
+  // correction they can make". The gate added to stop fabrication would have
+  // blocked the one answer that matters most.
+  session.screenAsked = [...new Set([...prior.screenAsked, ...session.screenAsked])];
   session.solicitedReviewed = [
     ...new Set([...prior.solicitedReviewed, ...session.solicitedReviewed]),
   ];
@@ -973,8 +983,17 @@ const handlers: Record<string, Handler> = {
             `Screen item ${itemId} has not been asked yet. Say its question ` +
             "exactly as written, wait for the answer, and record it then. An " +
             "answer to a question the subject never heard is not a record.",
+          // Applicability-filtered, like the success path. Without it this told
+          // the model `pregnancy` was outstanding for participants it does not
+          // apply to — the same false-incomplete failure screenItemsFor was
+          // written to remove from the review queue.
           items_remaining: PROTOCOL.safetyScreen
-            .filter((i) => !session.safetyScreen?.items.some((x) => x.itemId === i.id))
+            .filter(
+              (i) =>
+                (i.appliesTo !== "childbearing_potential" ||
+                  session.subject?.childbearingPotential) &&
+                !session.safetyScreen?.items.some((x) => x.itemId === i.id),
+            )
             .map((i) => i.id),
         },
         isError: true,

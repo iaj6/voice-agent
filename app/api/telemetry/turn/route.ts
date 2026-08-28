@@ -51,6 +51,14 @@ export async function POST(request: Request) {
     return Response.json({ error: "Implausible measurement" }, { status: 400 });
   }
 
+  // The same guard /api/review/[id] needed: `check_in_session.id` is a uuid
+  // column, so a malformed id throws out of the driver as an unhandled 500. This
+  // route is unauthenticated and takes the id straight from the body, so it is
+  // trivially reachable here.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return Response.json({ error: "Unknown session" }, { status: 404 });
+  }
+
   const session = await getSession(sessionId);
   if (!session) {
     return Response.json({ error: "Unknown session" }, { status: 404 });

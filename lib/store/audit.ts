@@ -202,6 +202,42 @@ export class AuditTrail {
    * needs to be loadable, because the broken chain is itself the finding and
    * hiding it behind a constructor error would lose it.
    */
+  /**
+   * Re-sequences this process's unwritten entries onto a trail somebody else
+   * extended, and returns the ones to insert.
+   *
+   * Two writers holding the same session is ordinary — a coordinator clicking
+   * the acknowledgement link while the call is still running is the case that
+   * made this necessary. Both mint the same next sequence number, and there are
+   * three things you can do about it. Drop one silently, which is what the code
+   * did and is a hole in the record. Throw, which is what replaced it and turns
+   * an ordinary race into a call that fails for the participant and keeps failing
+   * for the rest of the call, because the conflicting entry stays in memory.
+   *
+   * Or rebase: keep both, renumber ours after theirs, and rehash the chain from
+   * that point. Hashes survive the round trip through JSONB because canonicalize
+   * sorts keys — which is the property this file already established for exactly
+   * this kind of reason.
+   */
+  rebaseOnto(persisted: AuditEntry[], persistedHashes: Set<string>): AuditEntry[] {
+    const mine = this.entries.filter((e) => !persistedHashes.has(e.hash));
+    const ordered = [...persisted].sort((a, b) => a.seq - b.seq);
+
+    let seq = ordered.length === 0 ? 0 : ordered[ordered.length - 1].seq;
+    let prev = ordered.length === 0 ? GENESIS_HASH : ordered[ordered.length - 1].hash;
+
+    const rebased = mine.map((entry) => {
+      seq += 1;
+      const draft: Omit<AuditEntry, "hash"> = { ...entry, seq, prevHash: prev };
+      const rehashed: AuditEntry = { ...draft, hash: computeHash(draft) };
+      prev = rehashed.hash;
+      return rehashed;
+    });
+
+    this.entries = [...ordered, ...rebased];
+    return rebased;
+  }
+
   static rehydrate(sessionId: string, entries: AuditEntry[]): AuditTrail {
     const trail = new AuditTrail(sessionId);
     trail.entries = [...entries].sort((a, b) => a.seq - b.seq);

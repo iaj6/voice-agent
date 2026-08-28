@@ -60,7 +60,13 @@ export function reviewAuthorised(request: Request): boolean {
 
   // Bearer for a script, cookie for the page. Both are the same secret; the
   // cookie exists because a browser cannot attach a header to a navigation.
-  const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "");
+  //
+  // Only treated as a credential when it actually is one. `replace(/^Bearer /)`
+  // left any other scheme intact and then short-circuited the cookie, so a
+  // coordinator behind a gateway that injects its own Authorization header was
+  // locked out with a perfectly good cookie and a bare 401.
+  const header = request.headers.get("authorization");
+  const bearer = header?.startsWith("Bearer ") ? header.slice(7) : null;
   const offered = bearer || fromCookie(request);
   return typeof offered === "string" && offered.length > 0 && matches(offered, expected);
 }

@@ -124,10 +124,19 @@ export function aliasesFor(term: string): Set<string> {
     if (family.includes(key)) family.forEach((t) => group.add(t));
   }
 
-  // A protocol term is its own alias even when the map above says nothing about
-  // it, so a study that adds a symptom does not silently stop reconciling.
+  // A protocol term and its everyday words are the same symptom, keyed either
+  // way round. The previous version of this loop added `normalise(symptom.term)`
+  // only when it already equalled `key` — which line 1 had added — so it did
+  // nothing at all, and the property it claimed (a study that adds a symptom does
+  // not silently stop reconciling) was not delivered. A new protocol symptom
+  // absent from EVERYDAY still gets no aliases; what this fixes is the case where
+  // the participant's word is the key and the coded term is not, or vice versa.
   for (const symptom of PROTOCOL.solicitedSymptoms) {
-    if (normalise(symptom.term) === key) group.add(normalise(symptom.term));
+    const coded = normalise(symptom.term);
+    const everyday = EVERYDAY[coded];
+    if (!everyday) continue;
+    const family = [coded, ...everyday.map(normalise)];
+    if (family.includes(key)) family.forEach((t) => group.add(t));
   }
   return group;
 }

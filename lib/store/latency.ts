@@ -112,7 +112,14 @@ class MemoryLatencyStore implements LatencyStore {
   }
 
   async recent(limit = 2000): Promise<TurnLatency[]> {
-    return [...this.rows].reverse().slice(0, limit);
+    // By createdAt, not insertion order. record() merges in place, so a row
+    // created early and filled in later kept its original position — and with
+    // --limit set, latency.mjs dropped the most recently completed turns while
+    // keeping stale ones. The Postgres store orders by created_at desc, and two
+    // backends disagreeing about what a query means is its own defect class.
+    return [...this.rows]
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, limit);
   }
 }
 

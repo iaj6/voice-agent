@@ -231,6 +231,77 @@ describe(
       );
     });
 
+    test("two writers keep both entries and the chain still verifies", async () => {
+      // A coordinator acknowledging an escalation while the call is still running
+      // is the ordinary case, and each writer holds its own in-memory trail with
+      // its own counter. Both mint the same next sequence number.
+      //
+      // Three things you can do. Drop one silently — a hole in the record, which
+      // is what the code did. Throw — which was the fix, and was worse: an
+      // ordinary race became a turn that failed for the participant and kept
+      // failing, because the conflicting entry stayed in memory. Or rebase, and
+      // lose nothing.
+      // Pinned to the scratch database. Another test file deletes DATABASE_URL
+      // mid-suite, so getSessionStore() here can hand back the memory store —
+      // which is a different implementation of the thing being tested, and this
+      // test silently proved nothing until it printed its own store kind.
+      process.env.DATABASE_URL = scratch!.url;
+      __resetDb();
+      __setSessionStore(null);
+
+      const store = getSessionStore();
+      assert.equal(store.kind, "postgres", "this test must exercise the real store");
+      const live = await store.create();
+      await store.save(live);
+
+      const sweeper = (await store.get(live.id))!;
+
+      live.audit.record({
+        actor: "agent",
+        action: "AE_RECORDED",
+        entity: "AdverseEvent",
+        entityId: "AE-1",
+        reason: "written by the live call",
+      });
+      await store.save(live);
+
+      sweeper.audit.record({
+        actor: "coordinator",
+        action: "ESCALATION_ACKNOWLEDGED",
+        entity: "Escalation",
+        entityId: "ESC-1",
+        reason: "written by the coordinator, at the same sequence number",
+      });
+      await store.appendAudit(sweeper);
+
+      const reloaded = (await store.get(live.id))!;
+      const actions = reloaded.audit.all().map((e) => e.action);
+      assert.ok(actions.includes("AE_RECORDED"), "the live call's entry was lost");
+      assert.ok(
+        actions.includes("ESCALATION_ACKNOWLEDGED"),
+        "the coordinator's entry was lost",
+      );
+      assert.equal(reloaded.audit.verifyChain().valid, true, "the chain broke");
+
+      // Sequence numbers stay unique and contiguous after the rebase.
+      const seqs = reloaded.audit.all().map((e) => e.seq);
+      assert.deepEqual(seqs, [...new Set(seqs)].sort((a, b) => a - b), "seq collided");
+
+      // And the live session can still write afterwards, rather than being stuck
+      // throwing for the rest of the call.
+      live.audit.record({
+        actor: "agent",
+        action: "CHECK_IN_COMPLETED",
+        entity: "CheckInSession",
+        entityId: live.id,
+        reason: "the call continued",
+      });
+      await store.appendAudit(live);
+      const after = (await store.get(live.id))!;
+      assert.equal(after.audit.verifyChain().valid, true);
+      assert.ok(after.audit.all().some((e) => e.action === "CHECK_IN_COMPLETED"));
+    });
+
     test("acknowledging an escalation lands on the record's own trail", async () => {
       // The only action a human takes in this whole system, and it was written to
       // escalation_delivery and nowhere else — so the hash-chained trail, which
@@ -278,48 +349,6 @@ describe(
         !entry.reason.includes("Dana"),
         "a named person ended up in the unerasable column",
       );
-    });
-
-    test("two writers cannot silently lose an audit entry", async () => {
-      // The escalation sweeper loading a session while a call is live is the
-      // ordinary case, and each holds its own in-memory trail with its own
-      // counter and hash chain. Both can mint "entry N"; the filter was
-      // `seq > high`, so the second vanished with no error anywhere — a hole in
-      // the record of what the system did, which is the one thing an audit trail
-      // exists to prevent.
-      const store = getSessionStore();
-      const live = await store.create();
-      await store.save(live);
-
-      // A second reader of the same session, as the sweeper would be.
-      const sweeper = (await store.get(live.id))!;
-
-      live.audit.record({
-        actor: "agent",
-        action: "AE_RECORDED",
-        entity: "AdverseEvent",
-        entityId: "AE-1",
-        reason: "written by the live call",
-      });
-      await store.save(live);
-
-      sweeper.audit.record({
-        actor: "safety_net",
-        action: "ESCALATED",
-        entity: "Escalation",
-        entityId: "ESC-1",
-        reason: "written by the sweeper, at the same sequence number",
-      });
-
-      await assert.rejects(
-        () => store.appendAudit(sweeper),
-        /already exists with different content/,
-        "the second writer's entry was dropped silently",
-      );
-
-      // And nothing was half-written: the stored trail still verifies.
-      const reloaded = (await store.get(live.id))!;
-      assert.equal(reloaded.audit.verifyChain().valid, true);
     });
 
     test("a sealed record reads back exactly as it was written", async () => {
