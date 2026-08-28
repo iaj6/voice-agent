@@ -14,7 +14,22 @@ import { seal } from "./seal.ts";
  * storage, per-record retention policy, and CSV evidence behind it.
  */
 
-export type AuditActor = "subject" | "agent" | "system" | "safety_net";
+/**
+ * Who did the thing.
+ *
+ * `coordinator` is the only human in this list, and it exists because
+ * acknowledging an escalation is the only action in the whole system a person
+ * takes — and it was recorded solely in `escalation_delivery`, outside the
+ * hash-chained trail that is the record's evidence of what happened to it.
+ * 21 CFR 11.10(e) wants operator actions on that trail; this was the one
+ * operator action there was.
+ */
+export type AuditActor =
+  | "subject"
+  | "agent"
+  | "system"
+  | "safety_net"
+  | "coordinator";
 
 export interface AuditEntry {
   seq: number;

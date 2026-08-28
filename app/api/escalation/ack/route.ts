@@ -3,6 +3,7 @@
 // that needs a test — a link scanner silently acknowledging every escalation is
 // not something a build-only check would ever surface.
 import { getDeliveryStore } from "../../../../lib/store/deliveries.ts";
+import { noteAcknowledgement } from "../../../../lib/escalation/acknowledge.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,11 +98,19 @@ export async function POST(request: Request) {
     record.acknowledgedAt &&
     Date.parse(record.acknowledgedAt) > Date.parse(record.deadlineAt);
 
+  // Onto the record's own hash-chained trail, not just the delivery table.
+  const trail = await noteAcknowledgement(record, by);
+
   return page(
     "Acknowledged",
     `Escalation ${esc(record.escalationId)} for subject ${esc(record.subjectId ?? "unidentified")} ` +
       `was acknowledged at ${esc(when(record.acknowledgedAt))}.` +
       (late ? " This was after the response window closed, which is recorded." : "") +
+      (trail.recorded
+        ? ""
+        : " Your acknowledgement is recorded, but it could not be written to the " +
+          `call's audit trail (${esc(trail.detail ?? "unknown reason")}). Tell whoever ` +
+          "maintains this system: the trail is the record's evidence and it now has a gap.") +
       " Open the call record in the coordinator console to review what was captured.",
     true,
   );

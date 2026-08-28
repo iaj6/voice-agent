@@ -17,6 +17,7 @@ import { __setKeyStore, getKeyStore } from "../lib/store/keys.ts";
 import { executeTool } from "../lib/agent/tools.ts";
 import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/scratch-db.ts";
 import { getDeliveryStore } from "../lib/store/deliveries.ts";
+import { noteAcknowledgement } from "../lib/escalation/acknowledge.ts";
 
 const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
 const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
@@ -227,6 +228,55 @@ describe(
       assert.ok(
         !rows[0].ids.includes(VERIFY.subject_id),
         "the subject id survived the shred in escalation_delivery",
+      );
+    });
+
+    test("acknowledging an escalation lands on the record's own trail", async () => {
+      // The only action a human takes in this whole system, and it was written to
+      // escalation_delivery and nowhere else — so the hash-chained trail, which
+      // is the record's evidence of what happened to it, had no entry for the
+      // single human decision in the call. 21 CFR 11.10(e) wants operator
+      // actions on that trail; this was the one operator action there was.
+      const store = getSessionStore();
+      const session = await store.create();
+      await store.save(session);
+
+      const token = "tok-ack-trail-test";
+      await getDeliveryStore().queue(
+        {
+          sessionId: session.id,
+          escalationId: "ESC-001",
+          subjectId: VERIFY.subject_id,
+          urgency: "emergency",
+          channel: "test",
+          destination: "coordinator@example.test",
+          attempt: 1,
+          tier: "primary",
+          deadlineAt: new Date(),
+        },
+        token,
+      );
+
+      const acknowledged = await getDeliveryStore().acknowledge(token, "Dana Whitfield, RN");
+      assert.ok(acknowledged, "the acknowledgement did not take");
+
+      const result = await noteAcknowledgement(acknowledged!, "Dana Whitfield, RN");
+      assert.equal(result.recorded, true, result.detail ?? "");
+
+      const reloaded = (await store.get(session.id))!;
+      const entry = reloaded.audit
+        .all()
+        .find((e) => e.action === "ESCALATION_ACKNOWLEDGED");
+      assert.ok(entry, "the only human action in the system is not on the trail");
+      assert.equal(entry.actor, "coordinator");
+      assert.equal(entry.entityId, "ESC-001");
+      assert.equal(reloaded.audit.verifyChain().valid, true, "the chain broke");
+
+      // The name is in the sealed value, never in `reason` — that column is
+      // stored in the clear in a table that rejects UPDATE and DELETE.
+      assert.ok(
+        !entry.reason.includes("Dana"),
+        "a named person ended up in the unerasable column",
       );
     });
 
