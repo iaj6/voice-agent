@@ -312,14 +312,12 @@ export async function POST(request: Request) {
           const enc = new TextEncoder();
           controller.enqueue(
             enc.encode(
-              `data: ${JSON.stringify(
-                sseChunk(closedId, model, {
-                  content:
-                    `${err.message} If this is an emergency, please call your local ` +
-                    "emergency number now. Otherwise please call your study site " +
-                    "directly, or call us back then. Goodbye.",
-                }),
-              )}\n\n`,
+              sseChunk(closedId, body.model ?? "onx-301-check-in", {
+                content:
+                  `${err.message} If this is an emergency, please call your local ` +
+                  "emergency number now. Otherwise please call your study site " +
+                  "directly, or call us back then. Goodbye.",
+              }),
             ),
           );
           controller.enqueue(enc.encode("data: [DONE]\n\n"));

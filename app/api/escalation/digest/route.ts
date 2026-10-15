@@ -1,3 +1,4 @@
+import { matches } from "../../../../lib/review/auth.ts";
 import { sendDigest } from "../../../../lib/escalation/digest.ts";
 
 export const runtime = "nodejs";
@@ -43,12 +44,12 @@ async function run(request: Request) {
  * verbs, and either secret.
  */
 function authorised(request: Request): boolean {
-  const offered = request.headers.get("authorization")?.replace(/^Bearer /, "");
+  const offered = request.headers.get("authorization")?.replace(/^bearer\s+/i, "");
   if (!offered) return false;
   const accepted = [process.env.CRON_SECRET, process.env.ESCALATION_SWEEP_SECRET].filter(
     (s): s is string => Boolean(s),
   );
-  return accepted.includes(offered);
+  return accepted.some((secret) => matches(offered, secret));
 }
 
 function configured(): boolean {

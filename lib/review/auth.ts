@@ -37,7 +37,7 @@ export function reviewConfigured(): boolean {
 }
 
 /** Constant-time, so the endpoint does not leak the secret one byte at a time. */
-function matches(offered: string, expected: string): boolean {
+export function matches(offered: string, expected: string): boolean {
   const a = Buffer.from(offered, "utf8");
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length) return false;

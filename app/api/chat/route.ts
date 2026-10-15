@@ -1,6 +1,7 @@
 import { getSession, looksLikeSessionId } from "@/lib/store/session";
 import { runTurn } from "@/lib/agent/runner";
 import { getLatencyStore } from "@/lib/store/latency";
+import { resolveTurn } from "@/lib/agent/turn-source";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +49,12 @@ export async function POST(request: Request) {
     );
   }
 
+  // The server, not the client, decides what a system turn says. See turn-source.ts.
+  const turn = resolveTurn({ utterance, source }, session.messages.length);
+  if ("error" in turn) {
+    return Response.json({ error: turn.error }, { status: 400 });
+  }
+
   // Counted before the turn runs, so the browser can name the same turn without
   // the two having to agree on anything else.
   const turnIndex = session.messages.length;
@@ -70,8 +77,8 @@ export async function POST(request: Request) {
         send({ type: "turn", index: turnIndex });
 
         for await (const event of runTurn(session, {
-          utterance: utterance.trim(),
-          source: source === "system" ? "system" : "subject",
+          utterance: turn.utterance,
+          source: turn.source,
         })) {
           const at = Date.now() - startedAt;
           if (event.type === "delta" && firstTokenMs === null) firstTokenMs = at;

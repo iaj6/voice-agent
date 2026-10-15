@@ -816,6 +816,53 @@ const handlers: Record<string, Handler> = {
   async verify_subject(session, input) {
     const subjectId = String(input.subject_id ?? "");
     const dob = String(input.date_of_birth ?? "");
+
+    // The attempt limit and the one-identity-per-call rule are enforced here,
+    // not left to the instruction text below. A model can be talked into "one
+    // more try", and a second verification mid-call would reassign every record
+    // that follows to whoever's details were offered last.
+    if (session.subject) {
+      session.audit.record({
+        actor: "system",
+        action: "VERIFICATION_REFUSED",
+        entity: "CheckInSession",
+        entityId: session.id,
+        after: { subjectIdOffered: subjectId, verifiedAs: session.subject.subjectId },
+        reason: "This call is already verified. Identity cannot change mid-call.",
+      });
+      return {
+        result: {
+          verified: false,
+          instruction:
+            "This call is already verified for one participant. Do not verify " +
+            "again. Continue the check-in for the participant already verified.",
+        },
+        isError: true,
+      };
+    }
+    if (session.verificationAttempts >= 2) {
+      session.audit.record({
+        actor: "system",
+        action: "VERIFICATION_REFUSED",
+        entity: "CheckInSession",
+        entityId: session.id,
+        after: { attempt: session.verificationAttempts + 1, subjectIdOffered: subjectId },
+        reason: "Verification attempts exhausted. The offered details were not checked.",
+      });
+      return {
+        result: {
+          verified: false,
+          attempts_used: session.verificationAttempts,
+          attempts_remaining: 0,
+          instruction:
+            "Two attempts have already failed and no further attempts are allowed. " +
+            "Tell the subject to call their site directly, collect no clinical " +
+            "information, and call complete_check_in with ended_early true.",
+        },
+        isError: true,
+      };
+    }
+
     session.verificationAttempts += 1;
 
     const subject = findSubject(subjectId, dob);

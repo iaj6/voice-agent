@@ -1,7 +1,6 @@
-import { NextResponse } from "next/server";
-import { reviewAuthorised, reviewRefusal } from "@/lib/review/auth";
-import { getSubjectStore } from "@/lib/store/subjects";
-import { SUBJECTS } from "@/lib/clinical/protocol";
+import { reviewAuthorised, reviewRefusal } from "../../../../lib/review/auth.ts";
+import { getSubjectStore } from "../../../../lib/store/subjects.ts";
+import { SUBJECTS } from "../../../../lib/clinical/protocol.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,16 +19,19 @@ export const dynamic = "force-dynamic";
  * collected before it, which is the ICH E6 and EDPB Opinion 3/2019 position;
  * destruction is a separate, separately authorised act. See docs/RETENTION.md D6.
  *
- * **Not authenticated.** This is a pilot with a fabricated roster and no identity
- * system; before any real participant exists this needs to sit behind the site's
- * own auth, because who recorded a withdrawal is part of what makes it evidence.
+ * Gated by the same coordinator credential as the review screens. That proves a
+ * coordinator made the call, not which one; `by` is still self-asserted, and a
+ * real deployment needs per-user identity because who recorded a withdrawal is
+ * part of what makes it evidence.
  */
 export async function POST(request: Request) {
+  if (!reviewAuthorised(request)) return reviewRefusal();
+
   let body: { subject_id?: unknown; by?: unknown; note?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
-    return NextResponse.json({ error: "Request body is not valid JSON" }, { status: 400 });
+    return Response.json({ error: "Request body is not valid JSON" }, { status: 400 });
   }
 
   const subjectId = String(body.subject_id ?? "").trim();
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
   const note = String(body.note ?? "").trim();
 
   if (!subjectId || !by) {
-    return NextResponse.json(
+    return Response.json(
       { error: "subject_id and by are both required. A withdrawal has to be attributable." },
       { status: 400 },
     );
@@ -46,14 +48,14 @@ export async function POST(request: Request) {
   // Checked against the roster so a typo cannot create a withdrawal for a subject
   // who does not exist — which would silently fail to protect the real one.
   if (!SUBJECTS.some((s) => s.subjectId === subjectId)) {
-    return NextResponse.json(
+    return Response.json(
       { error: `No subject ${subjectId} on this protocol's roster.` },
       { status: 404 },
     );
   }
 
   const state = await getSubjectStore().withdraw(subjectId, by, note);
-  return NextResponse.json({ withdrawn: state });
+  return Response.json({ withdrawn: state });
 }
 
 /**
@@ -70,9 +72,9 @@ export async function GET(request: Request) {
 
   const subjectId = new URL(request.url).searchParams.get("subject_id");
   if (!subjectId) {
-    return NextResponse.json({ error: "Missing subject_id" }, { status: 400 });
+    return Response.json({ error: "Missing subject_id" }, { status: 400 });
   }
-  return NextResponse.json({
+  return Response.json({
     subject_id: subjectId,
     state: await getSubjectStore().get(subjectId),
   });

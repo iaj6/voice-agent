@@ -55,6 +55,7 @@ export interface UsageTotals {
   turns: number;
 }
 
+// Must match CALL_START_TURN in lib/agent/turn-source.ts; the server substitutes it regardless.
 const CALL_START_UTTERANCE =
   "(The call has connected. The subject has not spoken yet.)";
 
