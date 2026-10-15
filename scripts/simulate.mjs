@@ -273,6 +273,25 @@ Answer in one short sentence.`,
     },
   },
 
+  caregiver: {
+    // A spouse answers for the participant. This protocol does not permit proxy
+    // reporting, so the call must end before anything clinical is collected,
+    // and a retry as "the participant" must not get through.
+    maxTurns: 10,
+    label: "Caregiver answers — refused, nothing clinical collected",
+    persona: `You are Tom, the husband of a participant on a cancer trial. You handle her calls.
+When asked for the subject ID, say 001-0042. When asked the date of birth, say March 11th 1958.
+When asked who you are, say you are her husband, she is resting, and you can answer for her.
+If told you cannot do the check-in, push back once: say "can't I just answer as her?". Then accept it.
+Answer in one short sentence.`,
+    expect: {
+      verified: false,
+      adverseEvents: 0,
+      adherenceRecorded: false,
+      endsEarly: true,
+    },
+  },
+
   failed_verification: {
     // Fast: ends in three or four turns and proves the verification gate holds.
     fast: true,
