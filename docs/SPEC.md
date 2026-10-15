@@ -2,6 +2,8 @@
 
 **Status:** draft · **Target:** shadow pilot readiness · **Owner:** Ian Jones
 
+> ONX-301 is a synthetic protocol with an invented roster; no real participants are involved. The "shadow pilot" below is a hypothetical next stage, not one that is planned or running.
+
 This document is written for a reader with no memory of how the prototype was built.
 Everything it asserts is traceable to `README.md`, the design record, or a measurement
 that can be re-run.
@@ -95,7 +97,8 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
   reached nobody, because delivery was a step the producer had to remember and this one did
   not. See sprint 7.*
 - **F-13 (P)** Escalations are **delivered**, acknowledged, retried, and alarm on non-ack.
-  *Currently recorded but not delivered — the system makes a claim it cannot support.*
+  *Delivered by email (Resend) with an acknowledgement link, retry, backup contact, alarm
+  sweep and daily digest since 2026-08-27. Email is the only channel.*
 - **F-14 (P)** Locale-appropriate emergency and crisis numbers.
 - **F-15 (P)** The agent gives no medical advice, no diagnosis, and no reassurance.
 - **F-16 (P)** Never fabricates participant speech or an unasked answer.
@@ -119,7 +122,7 @@ Requirements are numbered for traceability from the backlog. **P** = pilot-block
 | **N-01 (P)** | Time to first audio under 2s at p50, under 4s at p95 | **Missed, and now measured rather than felt.** The first sentence leaves the server at 5.2s p50 on subject turns — before synthesis has begun, so time to first *audio* is later still. The "~2.5s p50" this row used to claim was optimistic by roughly 2x. Measured with `scripts/latency.mjs` over 19 turns of eval calls; unchanged when run serially, so it is not a concurrency artifact. Turns that acknowledge before calling tools reach 3.5s p50 and turns that do not reach 5.5s — **1.96s of the wait is the acknowledge-before-tools rule being broken**, which happens on every verification turn. The final leg, dispatch to audible, is browser-only and still unmeasured: see 4.4. |
 | **N-02 (P)** | A provider outage degrades audibly, never to silence | Speech falls back; the model does not |
 | **N-03 (P)** | Zero fabricated content reaching the record or the speaker | Guarded three ways; no ongoing measurement |
-| **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 27.0% / 91.1% specificity on a 473-utterance corpus; trend in `docs/net-history.jsonl` |
+| **N-04 (P)** | Safety-net sensitivity measured and tracked over time | 25.7% / 90.3% specificity on a 523-utterance corpus as of the last recorded measurement (`npm run measure-net`); trend in `docs/net-history.jsonl` |
 | **N-05 (P)** | Participant speech is not transmitted to a subprocessor without disclosure | **Not met, and understated here until 2026-08-27.** This row described the agent's read-back text reaching ElevenLabs. Since sprint 4 the participant's **raw audio** — every word they say, as 16 kHz PCM — streams to Deepgram on every call. Two processors, no subprocessor disclosure anywhere in the repository, and no consent language covering either (6.2, 6.5). |
 | **N-06** | Concurrency for one site's weekly cadence (~20 calls/week) | Untested |
 
@@ -150,13 +153,15 @@ as the target, each with what is actually true underneath it.
    suite.
 
    *Today:* two deterministic controls exist and both now deliver — the regex net
-   (`lib/clinical/safety.ts`) and the directed screen. The net measures **27.9% sensitivity**
-   and catches **0 of 81** colloquial signal utterances. The screen only fires on the nine
+   (`lib/clinical/safety.ts`) and the directed screen. The net measures **25.7% sensitivity**
+   (last recorded measurement) and catches **0 of 81** colloquial signal utterances. The screen only fires on the nine
    questions it asks. Everything else — a symptom volunteered in the open question, anything
    phrased in a way no rule matches — reaches a coordinator **only if the model chooses to
    call `escalate_to_coordinator`**. Grade 3+ and a positive seriousness determination, the
-   two things §7.1 names as having a clock, produce an instruction string and nothing else:
-   `ESCALATION_GRADE_THRESHOLD` has one consumer, and it selects between two sentences.
+   two things §7.1 names as having a clock, now page a coordinator deterministically when
+   the model records them. *(Corrected: this line used to say they produced an instruction
+   string and nothing else, which was true when it was written.)* The grade and the
+   seriousness call themselves are still the model's.
 
    So the honest statement is the one `scripts/measure-net.mjs` already prints in its own
    footer: **the net is a floor, not a ceiling — the model is the primary detector.** The
@@ -165,9 +170,10 @@ as the target, each with what is actually true underneath it.
 2. **The model proposes; a human disposes.** Every grade is a recommendation with a written
    rationale.
 
-   *Today:* true for the record — a coordinator reviews it — and false for the automated
-   path. "Grade 3+ leaves the automated path entirely" was never implemented. A grade 5
-   event recorded with no escalation raises nothing.
+   *Today:* true for the record — a coordinator reviews it. "Grade 3+ leaves the automated
+   path entirely" was never implemented as stated; what the code does is page a
+   coordinator deterministically for any event recorded at grade 3 or above, given the
+   grade the model recorded. A grade the model gets wrong is still wrong.
 
 3. **The output space is constrained where it can be.** Verbatim instrument wording, strict
    tool schemas, a turn-boundary guard, and a provenance gate that refuses to record a quote
@@ -199,10 +205,10 @@ Ordered by consequence, not likelihood.
 
 | Risk | Consequence | Current mitigation | Gap |
 |---|---|---|---|
-| Missed safety signal | Participant harm; delayed reporting | Model + net + screen + human review | Net at 27.0% and **0 of 81 colloquial**; screen covers 9 topics, self-harm by open probe only |
-| Escalation not delivered | Participant harm; record claims otherwise | None — recorded only | **F-13** |
+| Missed safety signal | Participant harm; delayed reporting | Model + net + screen + human review | Net at 25.7% and **0 of 81 colloquial**; screen covers 9 topics, self-harm by open probe only |
+| Escalation not delivered | Participant harm; record claims otherwise | Email delivery before the tool returns; agent told not to claim a failed page; retry, backup and alarm sweep | Email only; no paging or EHR channel |
 | Fabricated content in the record | Data falsification | Stop sequences, per-item tools, hold-back | No ongoing measurement |
-| Lost record mid-call | Reportable event disappears | None | **F-18** |
+| Lost record mid-call | Reportable event disappears | Postgres store; dropped-call resume | In-memory fallback when no database is configured |
 | Misheard symptom | Wrong data, silently | None | Confidence thresholds needed |
 | Model version drift | Instrument changed mid-study | None | **Sprint 0** |
 | Subprocessor exposure | Undisclosed PHI transfer | Fixed-wording cache reduces volume | BAA/DPA required |

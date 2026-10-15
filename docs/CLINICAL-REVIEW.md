@@ -1,4 +1,4 @@
-# Clinical review of the instrument
+# Simulated clinical review (pending a real clinician)
 
 **Status:** draft rationale, not a sign-off · **Date:** 2026-08-28 · **Owner:** Ian Jones + investigator
 
@@ -119,6 +119,9 @@ then derive the table from evidence.
    past a provenance gate that cannot tell the difference. Simultaneously a
    data-integrity failure, a consent failure, and the only route by which a grade 5
    event would ever reach this system.
+
+**Status:** items 1 (fever stops the call) and 3 (respondent pathway) have since been
+implemented; see the [README](../README.md). Item 2 is open.
 
 ## 6. Two things it said the system does well
 

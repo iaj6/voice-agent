@@ -51,3 +51,4 @@ tests/corpus/staged.json
 /CLAUDE.md
 /scripts/review-guard.sh
 /scripts/mark-reviewed.sh
+/AGENTS.md
