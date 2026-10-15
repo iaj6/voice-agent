@@ -623,6 +623,23 @@ async function resumeDroppedCall(
     return null;
   }
 
+  // A record is a proxy report if any part of it was. Resuming a caregiver's
+  // call under the participant's own verification would otherwise present the
+  // caregiver's answers, unflagged, as the participant's.
+  if (prior.respondent === "caregiver" && session.respondent !== "caregiver") {
+    session.respondent = "caregiver";
+    session.audit.record({
+      actor: "system",
+      action: "RESPONDENT_CARRIED_FORWARD",
+      entity: "CheckInSession",
+      entityId: session.id,
+      after: { from: prior.id, respondent: "caregiver" },
+      reason:
+        "The dropped call being resumed was answered by a caregiver, so the merged " +
+        "record is marked as a proxy report.",
+    });
+  }
+
   // Deep copies. Sharing structure with a record that is about to be closed let
   // later writes mutate the closed one — an emergency-tier screen answer once
   // appeared inside a locked session with no matching audit entry, so the record
@@ -989,6 +1006,11 @@ const handlers: Record<string, Handler> = {
       // spoken the participant's date of birth, and an erasure request finds
       // sessions by subject id.
       await getKeyStore().bindSubject(session.id, subject.subjectId);
+      // Sticky. Without it, a second verify_subject with respondent "self" (the
+      // caregiver saying "fine, I'm her", or the model simply retrying) passed,
+      // and the policy held only for as long as the model chose to honour it.
+      session.mustEnd =
+        "a caregiver answered and this protocol does not permit proxy reporting.";
       session.audit.record({
         actor: "system",
         action: "PROXY_RESPONDENT_REFUSED",
@@ -1129,8 +1151,17 @@ const handlers: Record<string, Handler> = {
       `record_safety_screen_item:${itemId}`,
     );
 
-    const answer =
-      input.answer === null || input.answer === undefined
+    // An item with its own positive path is past the point of being re-answered
+    // once it has come back yes: the page has gone, and the next record is the
+    // follow-up, not a correction. Letting "no, I didn't take it" land as
+    // answer:false un-flagged the item and carried the call on through the
+    // screen, which is the exact failure the follow-up exists to prevent.
+    const priorRecord = session.safetyScreen?.items.find((i) => i.itemId === itemId);
+    const followUp = Boolean(item.onPositive) && priorRecord?.answer === true;
+
+    const answer = followUp
+      ? true
+      : input.answer === null || input.answer === undefined
         ? null
         : Boolean(input.answer);
 
@@ -1142,7 +1173,9 @@ const handlers: Record<string, Handler> = {
     const record = {
       itemId,
       answer,
-      verbatim: screenedVerbatim,
+      // The follow-up adds the measurement; the subject's own account of the
+      // "yes" stays the verbatim.
+      verbatim: followUp ? (priorRecord?.verbatim ?? screenedVerbatim) : screenedVerbatim,
       answeredAt: new Date().toISOString(),
       ...(item.onPositive ? { measurement } : {}),
     };
@@ -1269,12 +1302,16 @@ const handlers: Record<string, Handler> = {
     // subject already volunteered the value; the next record of the same item
     // closes the call whatever the answer, so "I didn't take it" ends it too.
     const ownPath = isRedFlag ? item.onPositive : undefined;
+    const closing = Boolean(ownPath) && (wasAlreadyPositive || measurement !== null);
+    if (closing) {
+      session.mustEnd = `the safety screen came back positive for ${item.label.toLowerCase()}.`;
+    }
     const pagedLine = paged
       ? `${coordinator} has been paged.`
       : "The page did NOT go through. Do not say anyone has been alerted.";
     const ownPathInstruction = !ownPath
       ? null
-      : !wasAlreadyPositive && measurement === null
+      : !closing
         ? `${pagedLine} Stop the screen. Ask exactly: "${ownPath.followUpPrompt}" ` +
           "and stop generating. When they answer, call record_safety_screen_item " +
           `for ${itemId} again with answer true and measurement set to what they said, ` +
@@ -1975,6 +2012,19 @@ export async function executeTool(
   const handler = handlers[name];
   if (!handler) {
     return { result: { error: `Unknown tool: ${name}` }, isError: true };
+  }
+  // Once the call has been told to end, nothing more is collected. The
+  // instruction to end it goes to the model; this is what holds if the model
+  // carries on regardless.
+  if (session.mustEnd && name !== "complete_check_in") {
+    return {
+      result: {
+        error:
+          `This call must end: ${session.mustEnd} Collect nothing further. ` +
+          "Call complete_check_in with ended_early true.",
+      },
+      isError: true,
+    };
   }
   try {
     return await handler(session, (input ?? {}) as Record<string, unknown>);

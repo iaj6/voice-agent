@@ -87,6 +87,7 @@ interface StoredRecord {
   subject: CheckInSession["subject"];
   verificationAttempts: number;
   respondent?: CheckInSession["respondent"];
+  mustEnd?: string | null;
   subjectUtterances: string[];
   provenanceRejections: number;
   refusedQuotes: string[];
@@ -231,6 +232,7 @@ function toRecord(session: CheckInSession): StoredRecord {
     subject: session.subject,
     verificationAttempts: session.verificationAttempts,
     respondent: session.respondent,
+    mustEnd: session.mustEnd,
     subjectUtterances: session.subjectUtterances,
     provenanceRejections: session.provenanceRejections,
     refusedQuotes: session.refusedQuotes,
@@ -248,6 +250,7 @@ function blankSession(id: string): CheckInSession {
     subject: null,
     verificationAttempts: 0,
     respondent: null,
+    mustEnd: null,
     messages: [],
     subjectUtterances: [],
     provenanceRejections: 0,
@@ -580,6 +583,7 @@ class PostgresSessionStore implements SessionStore {
       subject: record.subject ?? null,
       verificationAttempts: record.verificationAttempts ?? 0,
       respondent: record.respondent ?? null,
+      mustEnd: record.mustEnd ?? null,
       messages,
       subjectUtterances: record.subjectUtterances ?? [],
       provenanceRejections: record.provenanceRejections ?? 0,

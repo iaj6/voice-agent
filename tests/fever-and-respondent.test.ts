@@ -138,3 +138,59 @@ test("where proxy reporting is permitted, the call proceeds and is marked as a p
     PROTOCOL.proxyReporting = policy;
   }
 });
+
+// Review findings: each of these held only while the model behaved.
+
+test("a fever follow-up recorded as 'no' cannot un-flag the item or skip the close", async () => {
+  const session = await verified();
+  session.subjectUtterances = ["Yes, I've been burning up since Tuesday.", "No, I didn't take it."];
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: true,
+    verbatim: "I've been burning up since Tuesday",
+    measurement: null,
+  });
+  const out = await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: false,
+    verbatim: "I didn't take it",
+    measurement: null,
+  });
+
+  const item = session.safetyScreen!.items.find((i) => i.itemId === "fever")!;
+  assert.equal(item.answer, true);
+  assert.equal(item.verbatim, "I've been burning up since Tuesday", "the first account was overwritten");
+  assert.deepEqual(session.safetyScreen!.positiveRedFlags, ["fever"]);
+  assert.match(instruction(out), /ended_early true/);
+});
+
+test("after the fever close, no further clinical record is accepted", async () => {
+  const session = await verified();
+  session.subjectUtterances = ["Yes, thirty-nine."];
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever",
+    answer: true,
+    verbatim: null,
+    measurement: "thirty-nine",
+  });
+  assert.ok(session.mustEnd);
+  const next = await executeTool(session, "record_adherence", {
+    doses_missed_since_last_check_in: 0,
+    reason_verbatim: null,
+  });
+  assert.equal(next.isError, true);
+});
+
+test("a refused caregiver cannot be re-verified as the participant", async () => {
+  const session = await getSessionStore().create();
+  await executeTool(session, "verify_subject", { ...VERIFY, respondent: "caregiver" });
+  const retry = await executeTool(session, "verify_subject", { ...VERIFY, respondent: "self" });
+  assert.equal(retry.isError, true);
+  assert.equal(session.subject, null);
+});
+
+test("the closing and proxy lines are pre-warmed fixed speech", async () => {
+  const { FIXED_LINES, FIXED_PROXY_NOT_PERMITTED } = await import("../lib/agent/fixed-speech.ts");
+  assert.ok(FIXED_LINES.includes(FIXED_PROXY_NOT_PERMITTED));
+  assert.ok(FIXED_LINES.includes(FEVER.onPositive!.closingInstruction));
+});

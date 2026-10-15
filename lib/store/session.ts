@@ -102,6 +102,13 @@ export interface CheckInSession {
    * read differently depending on the answer. Null until verified.
    */
   respondent: Respondent | null;
+  /**
+   * Set when the call has been told to end and nothing further may be collected:
+   * a refused proxy, or a fever closing. Every tool except complete_check_in
+   * refuses while it is set, so ending the call does not rest on the model
+   * following the instruction to end it.
+   */
+  mustEnd: string | null;
   messages: Anthropic.Beta.BetaMessageParam[];
   /**
    * Everything the subject actually said this call, in order.

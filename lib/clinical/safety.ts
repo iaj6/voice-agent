@@ -199,8 +199,13 @@ const URGENT_INSTRUCTION =
   "this is expected or harmless.";
 
 /** The fever item's protocol-set closing line, so both paths say the same thing. */
-const FEVER_CLOSING =
-  PROTOCOL.safetyScreen.find((i) => i.id === "fever")?.onPositive?.closingInstruction ?? "";
+// Thrown at load rather than defaulted: an empty fallback would tell the agent
+// to 'say exactly: ""' to someone with a possible neutropenic fever.
+const FEVER_CLOSING = (() => {
+  const line = PROTOCOL.safetyScreen.find((i) => i.id === "fever")?.onPositive?.closingInstruction;
+  if (!line) throw new Error("Protocol has no closing instruction for the fever screen item.");
+  return line;
+})();
 
 const NET_RULES: NetRule[] = [
   {

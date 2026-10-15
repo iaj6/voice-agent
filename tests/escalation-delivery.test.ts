@@ -420,3 +420,17 @@ test("a config failure still leaves a delivery row an operator can find", async 
   assert.equal(rows.length, 1, "nothing was recorded, so nobody can see the misconfiguration");
   assert.equal(rows[0].status, "failed");
 });
+
+test("a repeat that fires a subset of the rules already paged is the same alarm", async () => {
+  // "Fever and chills" fires two rules; "the fever is still there" fires one of
+  // them. Keyed on the exact set, the second paged again for the same event.
+  const { runTurn } = await import("../lib/agent/runner.ts");
+  const session = await getSessionStore().create();
+  for (const utterance of ["I've had a fever and chills", "the fever is still there"]) {
+    for await (const ev of runTurn(session, { source: "subject", utterance })) {
+      if (ev.type === "error") break;
+    }
+  }
+  const netEscalations = session.escalations.filter((e) => e.triggeredBy === "safety_net");
+  assert.equal(netEscalations.length, 1, "one fever produced two escalation records");
+});

@@ -60,7 +60,9 @@ export const FIXED_LINES: string[] = [
   FIXED_RESPONDENT_PROMPT,
   FIXED_OPEN_QUESTION,
   ...PROTOCOL.safetyScreen.map((s) => s.prompt),
-  ...PROTOCOL.safetyScreen.flatMap((s) => (s.onPositive ? [s.onPositive.followUpPrompt] : [])),
+  ...PROTOCOL.safetyScreen.flatMap((s) =>
+    s.onPositive ? [s.onPositive.followUpPrompt, s.onPositive.closingInstruction] : [],
+  ),
   ...PROTOCOL.solicitedSymptoms.map((s) => s.prompt),
   FIXED_ANYTHING_ELSE,
   FIXED_ADHERENCE,
@@ -70,4 +72,5 @@ export const FIXED_LINES: string[] = [
   FIXED_READ_BACK_CONFIRM,
   FIXED_VERIFICATION_FAILED,
   FIXED_VERIFICATION_EXHAUSTED,
+  FIXED_PROXY_NOT_PERMITTED,
 ];

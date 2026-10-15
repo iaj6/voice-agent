@@ -33,6 +33,7 @@ function session(utterances: string[]): CheckInSession {
     subject: SUBJECTS[0],
     verificationAttempts: 1,
     respondent: "self",
+    mustEnd: null,
     messages: [],
     subjectUtterances: utterances,
     provenanceRejections: 0,

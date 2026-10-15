@@ -403,8 +403,13 @@ export async function* runTurn(
       .map((h) => h.category)
       .sort()
       .join("; ");
+    // Covered, not identical: a repeat that fires a subset of what already paged
+    // is the same alarm. Exact matching paged twice for "fever and chills"
+    // followed by "the fever is still there".
     const alreadyRaised = session.escalations.find(
-      (e) => e.triggeredBy === "safety_net" && e.category === categories,
+      (e) =>
+        e.triggeredBy === "safety_net" &&
+        hits.every((h) => (e.category ?? "").split("; ").includes(h.category)),
     );
     if (alreadyRaised) {
       session.audit.record({
