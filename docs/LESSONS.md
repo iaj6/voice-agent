@@ -1,18 +1,16 @@
-# Code review
+# Lessons
 
-What to run, and what this codebase gets wrong repeatedly.
+What this codebase gets wrong repeatedly, and what to run before trusting a change.
 
 ## Before every push
 
 ```bash
-npm run verify      # enforced by .githooks/pre-push — types, lint, tests, safety floor
+npm run verify      # enforced by .githooks/pre-push: types, lint, tests, safety floor
 npm run eval:fast   # if the change touches the conversation at all
-/code-review high   # in Claude Code, on the diff
 ```
 
-`verify` is enforced because it is a command. Review is not enforceable the same way —
-it needs judgement — so the pre-push hook asks, and `.claude/settings.json` blocks a push
-from an agent session that has skipped it.
+`verify` is enforced because it is a command. Review is not enforceable the same way,
+because it needs judgement, so the pre-push hook asks for it rather than blocking on it.
 
 ## What actually goes wrong here
 

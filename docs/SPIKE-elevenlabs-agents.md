@@ -15,8 +15,8 @@ our endpoint, consumed our SSE, and drove a real multi-turn check-in — greetin
 verbatim, subject verified, a Grade 3 adverse event captured and escalated, audit chain
 intact.
 
-    agent_id  agent_9201m0dkz8w6e47secjp36sqmwhn
-    server    https://guides-adaptation-widespread-salt.trycloudflare.com/api/v1
+    agent_id  <AGENT_ID>
+    server    https://<tunnel>.trycloudflare.com/api/v1
 
 ---
 
@@ -127,7 +127,7 @@ One caveat: the tunnel URL is a disposable `trycloudflare.com` address that dies
 process. After restarting it, patch the agent:
 
 ```bash
-curl -X PATCH https://api.elevenlabs.io/v1/convai/agents/agent_9201m0dkz8w6e47secjp36sqmwhn \
+curl -X PATCH https://api.elevenlabs.io/v1/convai/agents/<AGENT_ID> \
   -H "xi-api-key: $ELEVENLABS_API_KEY" -H 'Content-Type: application/json' \
   -d '{"conversation_config":{"agent":{"prompt":{"custom_llm":{"url":"https://NEW-HOST/api/v1","model_id":"onx-301-check-in"}}}}}'
 ```

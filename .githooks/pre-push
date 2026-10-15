@@ -6,8 +6,7 @@
 # Lives in the repository rather than .git/hooks so it travels with a clone.
 #
 # The gate is enforceable because it is a command. Code review is not — it needs
-# judgement — so this asks rather than blocks. The Claude Code hook in
-# .claude/settings.json does the enforcing on that side.
+# judgement — so this asks rather than blocks.
 
 set -e
 
@@ -19,5 +18,5 @@ if ! npm run --silent verify; then
   exit 1
 fi
 
-printf '\n  \033[90mReview check — has this diff been through /code-review?\033[0m\n'
-printf '  \033[90mSee docs/CODE_REVIEW.md for what this codebase gets wrong repeatedly.\033[0m\n\n'
+printf '\n  \033[90mReview check: has this diff been reviewed?\033[0m\n'
+printf '  \033[90mSee docs/LESSONS.md for what this codebase gets wrong repeatedly.\033[0m\n\n'

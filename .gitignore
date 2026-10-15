@@ -43,3 +43,11 @@ voice-samples/
 .speech-cache/
 .spike-logs/
 tests/corpus/staged.json
+
+# local agent tooling (kept on the author's machine, not part of the project)
+/.agents/
+/.claude/
+/skills-lock.json
+/CLAUDE.md
+/scripts/review-guard.sh
+/scripts/mark-reviewed.sh
