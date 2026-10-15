@@ -32,6 +32,7 @@ function session(utterances: string[]): CheckInSession {
     status: "in_progress",
     subject: SUBJECTS[0],
     verificationAttempts: 1,
+    respondent: "self",
     messages: [],
     subjectUtterances: utterances,
     provenanceRejections: 0,

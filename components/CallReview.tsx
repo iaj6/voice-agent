@@ -13,6 +13,7 @@ interface Detail {
     shredded: boolean;
     subject: { subjectId?: string } | null;
     verificationAttempts: number;
+    respondent: "self" | "caregiver" | null;
     provenanceRejections: number;
     summary: string | null;
   };
@@ -27,7 +28,14 @@ interface Detail {
       spontaneous: boolean;
       seriousness: { isSerious?: boolean } | null;
     }[];
-    safetyScreen: { items: { itemId: string; answer: boolean | null; verbatim: string | null }[] } | null;
+    safetyScreen: {
+      items: {
+        itemId: string;
+        answer: boolean | null;
+        verbatim: string | null;
+        measurement?: string | null;
+      }[];
+    } | null;
     adherence: { dosesMissedSinceLastCheckIn: number; reasonVerbatim: string | null } | null;
     conMeds: { name: string; indicationVerbatim: string }[];
     escalations: { urgency: string; reason: string; triggeredBy: string }[];
@@ -130,6 +138,7 @@ export function CallReview({ id }: { id: string }) {
   }
 
   const shredded = data.call.shredded;
+  const proxy = data.call.respondent === "caregiver";
 
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ink-000)" }}>
@@ -144,6 +153,7 @@ export function CallReview({ id }: { id: string }) {
         <span className="ml-auto font-mono text-[10px] tabular-nums" style={{ color: "var(--color-bone-faint)" }}>
           {new Date(data.call.createdAt).toLocaleString()} · {data.call.status}
           {data.call.synthetic ? " · EVAL" : ""}
+          {data.call.respondent ? ` · answered by ${proxy ? "caregiver" : "participant"}` : ""}
         </span>
       </header>
 
@@ -161,6 +171,18 @@ export function CallReview({ id }: { id: string }) {
         </div>
       ) : null}
 
+      {/* Before the content, like the chain warning: every answer below reads
+          differently when someone else gave it. */}
+      {proxy ? (
+        <div
+          className="border-b px-6 py-3 text-[12px]"
+          style={{ borderColor: "var(--color-amber)", color: "var(--color-amber)" }}
+        >
+          Answered by a caregiver on the participant&rsquo;s behalf. Every answer on
+          this call is a proxy report, not the participant&rsquo;s own.
+        </div>
+      ) : null}
+
       {shredded ? (
         <div
           className="border-b px-6 py-3 text-[11.5px] leading-relaxed"
@@ -175,7 +197,7 @@ export function CallReview({ id }: { id: string }) {
 
       <main className="grid gap-6 px-6 py-5 lg:grid-cols-2">
         <div className="flex flex-col gap-6">
-          <Section title="What the participant said">
+          <Section title={proxy ? "What the caregiver said" : "What the participant said"}>
             {data.saidByParticipant.length === 0 ? (
               <p className="text-[11.5px]" style={{ color: "var(--color-bone-faint)" }}>
                 {shredded
@@ -314,6 +336,11 @@ export function CallReview({ id }: { id: string }) {
                       {item.answer === true ? "YES" : item.answer === null ? "N/A" : " NO"}
                     </span>
                     <span style={{ color: "var(--color-bone-dim)" }}>{item.itemId}</span>
+                    {item.measurement ? (
+                      <span className="font-mono" style={{ color: "var(--color-bone)" }}>
+                        reported {item.measurement}
+                      </span>
+                    ) : null}
                   </li>
                 ))}
               </ul>

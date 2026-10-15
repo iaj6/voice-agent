@@ -65,6 +65,7 @@ export async function GET(
       shredded: session.shredded,
       subject: session.subject,
       verificationAttempts: session.verificationAttempts,
+      respondent: session.respondent,
       provenanceRejections: session.provenanceRejections,
       summary: session.summary ?? null,
     },

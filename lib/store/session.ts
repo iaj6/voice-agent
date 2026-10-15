@@ -43,6 +43,13 @@ export interface SafetyScreenItemRecord {
   answer: boolean | null;
   verbatim: string | null;
   answeredAt: string;
+  /**
+   * A follow-up measurement as the participant said it, units included ("38.6",
+   * "about a hundred and one"). Only for items with an onPositive follow-up.
+   * Kept as spoken rather than parsed: the number is what a clinician reads, and
+   * a parser that guesses Fahrenheit from Celsius is a new way to be wrong.
+   */
+  measurement?: string | null;
 }
 
 export interface SafetyScreenRecord {
@@ -77,6 +84,8 @@ export interface EscalationRecord {
   sponsorNotificationDeadline: string | null;
 }
 
+export type Respondent = "self" | "caregiver";
+
 export type SessionStatus = "awaiting_verification" | "in_progress" | "escalated" | "completed";
 
 export interface CheckInSession {
@@ -87,6 +96,12 @@ export interface CheckInSession {
   status: SessionStatus;
   subject: Subject | null;
   verificationAttempts: number;
+  /**
+   * Who answered: the participant, or a caregiver on their behalf. Recorded at
+   * verification, before anything clinical, because every record after it is
+   * read differently depending on the answer. Null until verified.
+   */
+  respondent: Respondent | null;
   messages: Anthropic.Beta.BetaMessageParam[];
   /**
    * Everything the subject actually said this call, in order.
@@ -264,6 +279,7 @@ export interface SessionSnapshot {
     | "lastCheckIn"
     | "childbearingPotential"
   > | null;
+  respondent: Respondent | null;
   adverseEvents: AdverseEventRecord[];
   safetyScreen: SafetyScreenRecord | null;
   adherence: AdherenceRecord | null;
@@ -297,6 +313,7 @@ export function snapshot(session: CheckInSession): SessionSnapshot {
           childbearingPotential: session.subject.childbearingPotential,
         }
       : null,
+    respondent: session.respondent,
     adverseEvents: session.adverseEvents,
     safetyScreen: session.safetyScreen,
     adherence: session.adherence,

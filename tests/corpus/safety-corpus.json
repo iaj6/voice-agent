@@ -315,7 +315,7 @@
     },
     {
       "text": "I've had a fever since Monday",
-      "expect": "urgent",
+      "expect": "emergency",
       "topic": "fever",
       "kind": "direct"
     },
@@ -327,19 +327,19 @@
     },
     {
       "text": "my temperature was a hundred and two last night",
-      "expect": "urgent",
+      "expect": "emergency",
       "topic": "fever",
       "kind": "colloquial"
     },
     {
       "text": "I've been burning up and then freezing, on and off all week",
-      "expect": "urgent",
+      "expect": "emergency",
       "topic": "fever",
       "kind": "colloquial"
     },
     {
       "text": "I felt hot and clammy and couldn't get warm",
-      "expect": "urgent",
+      "expect": "emergency",
       "topic": "fever",
       "kind": "colloquial"
     },

@@ -19,6 +19,7 @@ function sessionWith(utterances: string[]): CheckInSession {
     status: "in_progress" as const,
     subject: SUBJECTS[0],
     verificationAttempts: 1,
+    respondent: "self",
     messages: [],
     subjectUtterances: utterances,
     provenanceRejections: 0,

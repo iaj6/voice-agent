@@ -27,7 +27,33 @@ export interface SafetyScreenItem {
   urgencyIfPositive: "routine" | "urgent" | "emergency";
   /** Omit to ask everyone. */
   appliesTo?: "childbearing_potential";
+  /**
+   * For items where a "yes" ends the call with a specific instruction rather than
+   * the generic emergency line. The page goes out on the "yes" itself; the
+   * follow-up only adds the measurement to the record, and nothing waits on it.
+   */
+  onPositive?: {
+    /** Asked once, word for word, after the page has gone out. */
+    followUpPrompt: string;
+    /**
+     * What the participant is told, word for word. Protocol-set wording: in a
+     * real study this sentence is approved by the investigator and the IRB, not
+     * written by an engineer, and it is placeholder text until then.
+     */
+    closingInstruction: string;
+  };
 }
+
+/**
+ * Who may answer a check-in on the participant's behalf.
+ *
+ * "not_permitted" is right for an adult self-report instrument: a spouse's
+ * account of how the participant feels, recorded as the participant's own words,
+ * is a data-integrity failure and a consent failure at once. A pediatric study
+ * flips this, because there the caregiver answering is the normal case, and the
+ * instrument then needs its own validated proxy form rather than the adult one.
+ */
+export type ProxyPolicy = "not_permitted" | "permitted";
 
 export interface ProtocolDefinition {
   protocolId: string;
@@ -44,6 +70,8 @@ export interface ProtocolDefinition {
   safetyScreen: SafetyScreenItem[];
   /** Hours the site has to report an SAE to the sponsor once aware. */
   saeReportingWindowHours: number;
+  /** Whether a caregiver may answer for the participant. See ProxyPolicy. */
+  proxyReporting: ProxyPolicy;
 }
 
 export interface SolicitedSymptom {
@@ -67,6 +95,8 @@ export const PROTOCOL: ProtocolDefinition = {
   investigationalProduct: "Onvatinib 120 mg oral tablet, once daily",
   checkInCadence: "Weekly, between scheduled site visits",
   saeReportingWindowHours: 24,
+  // Adult self-report instrument. See ProxyPolicy for why this is not a default.
+  proxyReporting: "not_permitted",
   safetyScreen: [
     {
       id: "unplanned_care",
@@ -84,11 +114,30 @@ export const PROTOCOL: ProtocolDefinition = {
       urgencyIfPositive: "emergency",
     },
     {
+      /**
+       * Emergency, and the call stops.
+       *
+       * This paged at urgent while the safety net's own fever rule called it "an
+       * oncologic emergency" in the same breath, and after the page the agent
+       * carried on through fifteen more turns of screen, symptoms and adherence.
+       * Febrile neutropenia is measured against a one-hour door-to-antibiotics
+       * window; a check-in that spends part of it collecting data has its
+       * priorities backwards. The simulated clinical review (docs/CLINICAL-REVIEW.md
+       * section 5.1) made this its first pre-pilot change.
+       */
       id: "fever",
       label: "Fever or chills",
       prompt: "Have you had a fever, or felt hot and shivery?",
       redFlag: true,
-      urgencyIfPositive: "urgent",
+      urgencyIfPositive: "emergency",
+      onPositive: {
+        followUpPrompt:
+          "What was the highest temperature you measured, if you took it?",
+        closingInstruction:
+          "Because you're on this study, a fever needs to be checked by a doctor today. " +
+          "Please call your study site's 24-hour number now, or go to your nearest " +
+          "emergency department if you can't reach them.",
+      },
     },
     {
       id: "bleeding_or_fainting",

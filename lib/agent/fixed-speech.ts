@@ -21,6 +21,12 @@ export const FIXED_GREETING =
 
 export const FIXED_DOB_PROMPT = "Thank you. And what is your date of birth?";
 
+export const FIXED_RESPONDENT_PROMPT =
+  "And am I speaking with the study participant, or with someone answering for them?";
+
+export const FIXED_PROXY_NOT_PERMITTED =
+  "Thank you for calling. This check-in has to be answered by the participant themselves, so I can't take it today. Please ask them to call back, or call the study site directly.";
+
 export const FIXED_OPEN_QUESTION =
   "How have you been feeling since we last spoke?";
 
@@ -51,8 +57,10 @@ export const FIXED_VERIFICATION_EXHAUSTED =
 export const FIXED_LINES: string[] = [
   FIXED_GREETING,
   FIXED_DOB_PROMPT,
+  FIXED_RESPONDENT_PROMPT,
   FIXED_OPEN_QUESTION,
   ...PROTOCOL.safetyScreen.map((s) => s.prompt),
+  ...PROTOCOL.safetyScreen.flatMap((s) => (s.onPositive ? [s.onPositive.followUpPrompt] : [])),
   ...PROTOCOL.solicitedSymptoms.map((s) => s.prompt),
   FIXED_ANYTHING_ELSE,
   FIXED_ADHERENCE,

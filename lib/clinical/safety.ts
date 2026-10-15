@@ -15,6 +15,7 @@ import {
   suppressionReason,
   type ContextVerdict,
 } from "./context.ts";
+import { PROTOCOL } from "./protocol.ts";
 
 export type CtcaeGrade = 1 | 2 | 3 | 4 | 5;
 
@@ -197,6 +198,10 @@ const URGENT_INSTRUCTION =
   "escalate_to_coordinator with urgency 'urgent'. Do not reassure the subject that " +
   "this is expected or harmless.";
 
+/** The fever item's protocol-set closing line, so both paths say the same thing. */
+const FEVER_CLOSING =
+  PROTOCOL.safetyScreen.find((i) => i.id === "fever")?.onPositive?.closingInstruction ?? "";
+
 const NET_RULES: NetRule[] = [
   {
     category: "Possible cardiac or respiratory emergency",
@@ -303,19 +308,33 @@ const NET_RULES: NetRule[] = [
     instruction: URGENT_INSTRUCTION,
   },
   {
+    // Emergency, matching the directed screen item. This rule used to call
+    // neutropenic fever "an oncologic emergency" and then page it at urgent, in
+    // the same sentence. Chills and shaking are split out below and stay urgent:
+    // "my hands are shaking" is a common sentence, and ending a call on it would
+    // be the alert fatigue the measurement page warns about.
     category: "Possible neutropenic fever",
-    urgency: "urgent",
+    urgency: "emergency",
     patterns: [
       /\bfever\b/i,
       /\btemperature (of |was |is )?(10[0-9]|3[89]|4[01])\b/i,
-      /\bchills\b/i,
-      /\bshaking\b/i,
     ],
     instruction:
       "Fever in a subject on cytotoxic or targeted therapy may indicate neutropenic " +
-      "fever, which is an oncologic emergency. Ask only for the measured temperature " +
-      "and when it started, then call escalate_to_coordinator with urgency 'urgent'. " +
-      "Do not tell the subject it is probably a cold, or to take anything for it.",
+      "fever, which is an oncologic emergency. Stop the check-in script. Ask only for " +
+      "the highest temperature they measured, then say exactly: \"" +
+      FEVER_CLOSING +
+      "\" Then call complete_check_in with ended_early true. Do not tell the subject " +
+      "it is probably a cold, or to take anything for it.",
+  },
+  {
+    category: "Chills or rigors",
+    urgency: "urgent",
+    patterns: [/\bchills\b/i, /\bshaking\b/i],
+    instruction:
+      "Chills or shaking can be the first sign of a fever. Ask once whether they " +
+      "have had a fever or taken their temperature, then call escalate_to_coordinator " +
+      "with urgency 'urgent'. Do not offer an explanation for it.",
   },
   {
     category: "Pregnancy",

@@ -9,6 +9,7 @@ import {
   FIXED_GREETING,
   FIXED_OPEN_QUESTION,
   FIXED_READ_BACK_CONFIRM,
+  FIXED_RESPONDENT_PROMPT,
   FIXED_SELF_CARE_PROBE,
   FIXED_VERIFICATION_EXHAUSTED,
   FIXED_VERIFICATION_FAILED,
@@ -96,7 +97,8 @@ Follow this order, but abandon it instantly for any safety signal.
 ## Step 1 — Verify identity
 Open with exactly: "${FIXED_GREETING}"
 Then, once they answer, say exactly: "${FIXED_DOB_PROMPT}"
-Call verify_subject with both. Never proceed to any clinical question before verification succeeds.
+Then, once they answer, say exactly: "${FIXED_RESPONDENT_PROMPT}"
+Call verify_subject with all three. Record respondent as "caregiver" if anyone other than the participant is answering, even a close family member; if the answer is unclear, ask again. Never proceed to any clinical question before verification succeeds.
 If verification fails, say exactly: "${FIXED_VERIFICATION_FAILED}"
 After a second failure, say exactly: "${FIXED_VERIFICATION_EXHAUSTED}" — then call complete_check_in with ended_early true and collect nothing clinical.
 
@@ -160,7 +162,7 @@ Call escalate_to_coordinator immediately for any of these:
 - Any adverse event you graded 3 or higher.
 - Any event meeting a seriousness criterion.
 - Any mention of hospitalization, emergency care, or an ambulance.
-- Fever, or any sign of infection. Fever on this study is treated as urgent, not routine.
+- Fever, or any sign of infection. Fever on this study is treated as an emergency: it pages immediately and the call ends with a fixed instruction the tool result gives you.
 - Pregnancy or a suspected pregnancy.
 - Any statement about self-harm, not wanting to be here, or not wanting to go on.
 - Any intent to stop study drug or leave the study.

@@ -28,6 +28,7 @@ import { getDeliveryStore } from "../store/deliveries.ts";
 const MAX_DELIVERY_ATTEMPTS = 2;
 import { getKeyStore } from "../store/keys.ts";
 import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
+import { FIXED_PROXY_NOT_PERMITTED } from "./fixed-speech.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -53,8 +54,16 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
           type: "string",
           description: "Date of birth normalized to YYYY-MM-DD.",
         },
+        respondent: {
+          type: "string",
+          enum: ["self", "caregiver"],
+          description:
+            "Who is answering, from their reply to the fixed respondent question: " +
+            "'self' if the participant is on the line, 'caregiver' if someone is " +
+            "answering on their behalf. If unclear, ask again; do not assume.",
+        },
       },
-      required: ["subject_id", "date_of_birth"],
+      required: ["subject_id", "date_of_birth", "respondent"],
     },
   },
   {
@@ -88,8 +97,16 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
             "What the subject actually said, in their words. Null if they answered " +
             "with a bare yes or no.",
         },
+        measurement: {
+          type: ["string", "null"],
+          description:
+            "Only when a tool result has told you to ask a follow-up for this item " +
+            "and you are recording the answer: the value exactly as the subject said " +
+            "it, units included. Null if they did not measure, and null on every " +
+            "other call.",
+        },
       },
-      required: ["item_id", "answer", "verbatim"],
+      required: ["item_id", "answer", "verbatim", "measurement"],
     },
   },
   {
@@ -962,7 +979,43 @@ const handlers: Record<string, Handler> = {
       };
     }
 
+    // Who is on the line, decided before anything clinical is asked, because a
+    // caregiver's account recorded as the participant's own words is a
+    // data-integrity failure and a consent failure at once. The schema requires
+    // the field on every real call; absent only when a test calls this directly.
+    const respondent = input.respondent === "caregiver" ? "caregiver" : "self";
+    if (respondent === "caregiver" && PROTOCOL.proxyReporting === "not_permitted") {
+      // Bound for the same reason as the withdrawal path: the caregiver has
+      // spoken the participant's date of birth, and an erasure request finds
+      // sessions by subject id.
+      await getKeyStore().bindSubject(session.id, subject.subjectId);
+      session.audit.record({
+        actor: "system",
+        action: "PROXY_RESPONDENT_REFUSED",
+        entity: "CheckInSession",
+        entityId: session.id,
+        after: { subjectId: subject.subjectId, respondent },
+        reason:
+          "A caregiver answered for the participant and this protocol does not " +
+          "permit proxy reporting. Nothing clinical was collected.",
+      });
+      return {
+        result: {
+          verified: false,
+          proxy_not_permitted: true,
+          instruction:
+            `Say exactly: "${FIXED_PROXY_NOT_PERMITTED}" If they then describe ` +
+            "anything urgent about the participant, tell them to call " +
+            `${emergencyPhrase(speakingRegion(subject.siteCountry, session.subjectUtterances, siteCountryForPrefix))} ` +
+            "if it is an emergency. Then call complete_check_in with ended_early " +
+            "true. Do not ask any clinical question.",
+        },
+        isError: true,
+      };
+    }
+
     session.subject = subject;
+    session.respondent = respondent;
     // Never downgrade. The deterministic net escalates on the subject's first
     // utterance, which over a phone line is routinely the same breath as their
     // date of birth — so this runs with the record already escalated, and
@@ -973,8 +1026,10 @@ const handlers: Record<string, Handler> = {
       action: "SUBJECT_VERIFIED",
       entity: "CheckInSession",
       entityId: session.id,
-      after: { subjectId: subject.subjectId, siteId: subject.siteId },
-      reason: "Two-factor verification succeeded (subject ID + date of birth).",
+      after: { subjectId: subject.subjectId, siteId: subject.siteId, respondent },
+      reason:
+        "Two-factor verification succeeded (subject ID + date of birth)." +
+        (respondent === "caregiver" ? " Answered by a caregiver; proxy reporting is permitted." : ""),
     });
 
     const resumed = await resumeDroppedCall(session, subject.subjectId);
@@ -1079,11 +1134,17 @@ const handlers: Record<string, Handler> = {
         ? null
         : Boolean(input.answer);
 
+    const measurement =
+      item.onPositive && typeof input.measurement === "string" && input.measurement.trim()
+        ? input.measurement.trim()
+        : null;
+
     const record = {
       itemId,
       answer,
       verbatim: screenedVerbatim,
       answeredAt: new Date().toISOString(),
+      ...(item.onPositive ? { measurement } : {}),
     };
 
     session.safetyScreen ??= { items: [], positiveRedFlags: [] };
@@ -1201,6 +1262,27 @@ const handlers: Record<string, Handler> = {
       siteCountryForPrefix,
     );
 
+    // Items with their own positive path (fever) stop the call like any emergency,
+    // but with a protocol-set instruction instead of "call 911", and with one
+    // follow-up to capture the measurement. The page has already gone out above;
+    // nothing here waits on the follow-up. A first "yes" asks it, unless the
+    // subject already volunteered the value; the next record of the same item
+    // closes the call whatever the answer, so "I didn't take it" ends it too.
+    const ownPath = isRedFlag ? item.onPositive : undefined;
+    const pagedLine = paged
+      ? `${coordinator} has been paged.`
+      : "The page did NOT go through. Do not say anyone has been alerted.";
+    const ownPathInstruction = !ownPath
+      ? null
+      : !wasAlreadyPositive && measurement === null
+        ? `${pagedLine} Stop the screen. Ask exactly: "${ownPath.followUpPrompt}" ` +
+          "and stop generating. When they answer, call record_safety_screen_item " +
+          `for ${itemId} again with answer true and measurement set to what they said, ` +
+          "or null if they did not measure."
+        : `${pagedLine} Say exactly: "${ownPath.closingInstruction}" ` +
+          (paged ? `You may add, in one sentence, that ${coordinator} has been alerted. ` : "") +
+          "Then call complete_check_in with ended_early true. Ask nothing further.";
+
     return {
       result: {
         recorded: true,
@@ -1216,7 +1298,8 @@ const handlers: Record<string, Handler> = {
         acknowledge_by: delivery?.delivery?.deadlineAt ?? null,
         items_remaining: remaining.map((i) => i.id),
         instruction:
-          isRedFlag && item.urgencyIfPositive === "emergency"
+          ownPathInstruction ??
+          (isRedFlag && item.urgencyIfPositive === "emergency"
             ? paged
               ? `This is an emergency-tier answer and ${coordinator} has been paged. ` +
                 "Stop the screen. Tell the subject in one sentence to call " +
@@ -1237,7 +1320,7 @@ const handlers: Record<string, Handler> = {
                   "today, then carry on with the remaining screen items."
               : remaining.length > 0
                 ? `Recorded. Next unanswered screen item: ${remaining[0].id}. Ask it exactly as written.`
-                : "Screen complete. Move to the solicited symptom review.",
+                : "Screen complete. Move to the solicited symptom review."),
       },
       // An escalation nobody received is an error condition, and the model should
       // see it as one rather than as a successful call.
