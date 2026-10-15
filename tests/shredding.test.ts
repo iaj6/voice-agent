@@ -19,7 +19,7 @@ import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/sc
 import { getDeliveryStore } from "../lib/store/deliveries.ts";
 import { noteAcknowledgement } from "../lib/escalation/acknowledge.ts";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
 const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
 /** What the agent writes about a participant's week. The most readable single
  *  paragraph about them in the database, and it has its own column. */
@@ -178,6 +178,7 @@ describe(
       await executeTool(session, "verify_subject", {
         subject_id: VERIFY.subject_id,
         date_of_birth: "1958-03-12", // one digit out, as a mishearing would be
+        respondent: "self",
       });
       await store.save(session);
 
@@ -471,6 +472,7 @@ describe(
       const out = await executeTool(session, "verify_subject", {
         subject_id: "001-0055",
         date_of_birth: "1971-11-02",
+        respondent: "self",
       });
       assert.equal(out.isError, true, "a withdrawn participant was verified");
 

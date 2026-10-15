@@ -48,6 +48,7 @@ export async function raiseEscalation(
 ): Promise<DeliveryOutcome> {
   session.escalations.push(escalation);
   session.status = "escalated";
+  armEmergencyEnd(session, escalation);
   session.audit.record({
     actor: options.actor,
     action: "ESCALATED",
@@ -74,4 +75,14 @@ export async function raiseEscalation(
   }
 
   return deliverEscalation(session, escalation, { onCall: options.onCall ?? true });
+}
+
+/**
+ * An emergency ends the call, so once one is raised nothing more is collected.
+ * The tool layer enforces it (see executeTool); this is the single place that
+ * arms it for every emergency, whoever raised it.
+ */
+export function armEmergencyEnd(session: CheckInSession, escalation: EscalationRecord): void {
+  if (escalation.urgency !== "emergency" || session.mustEnd) return;
+  session.mustEnd = `an emergency was raised (${escalation.category ?? escalation.reason}).`;
 }

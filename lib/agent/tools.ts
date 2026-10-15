@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { PROTOCOL, findSubject, siteCountryForPrefix } from "../clinical/protocol.ts";
+import { PROTOCOL, escalationCovers, findSubject, siteCountryForPrefix } from "../clinical/protocol.ts";
 import { emergencyPhrase, speakingRegion } from "../clinical/locale.ts";
 import {
   CTCAE_GRADES,
@@ -21,14 +21,14 @@ import {
 } from "../store/session.ts";
 import { getSessionStore } from "../store/session-store.ts";
 import { deliverEscalation } from "../escalation/deliver.ts";
-import { raiseEscalation } from "../escalation/raise.ts";
+import { armEmergencyEnd, raiseEscalation } from "../escalation/raise.ts";
 import { getDeliveryStore } from "../store/deliveries.ts";
 
 /** How many times one escalation may block a live call on a failing provider. */
 const MAX_DELIVERY_ATTEMPTS = 2;
 import { getKeyStore } from "../store/keys.ts";
 import { getSubjectStore, isWithdrawn } from "../store/subjects.ts";
-import { FIXED_PROXY_NOT_PERMITTED } from "./fixed-speech.ts";
+import { FIXED_PROXY_NOT_PERMITTED, FIXED_RESPONDENT_PROMPT } from "./fixed-speech.ts";
 
 export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
@@ -623,23 +623,6 @@ async function resumeDroppedCall(
     return null;
   }
 
-  // A record is a proxy report if any part of it was. Resuming a caregiver's
-  // call under the participant's own verification would otherwise present the
-  // caregiver's answers, unflagged, as the participant's.
-  if (prior.respondent === "caregiver" && session.respondent !== "caregiver") {
-    session.respondent = "caregiver";
-    session.audit.record({
-      actor: "system",
-      action: "RESPONDENT_CARRIED_FORWARD",
-      entity: "CheckInSession",
-      entityId: session.id,
-      after: { from: prior.id, respondent: "caregiver" },
-      reason:
-        "The dropped call being resumed was answered by a caregiver, so the merged " +
-        "record is marked as a proxy report.",
-    });
-  }
-
   // Deep copies. Sharing structure with a record that is about to be closed let
   // later writes mutate the closed one — an emergency-tier screen answer once
   // appeared inside a locked session with no matching audit entry, so the record
@@ -671,7 +654,29 @@ async function resumeDroppedCall(
     provenanceRejections: session.provenanceRejections,
     refusedQuotes: [...session.refusedQuotes],
     status: session.status,
+    respondent: session.respondent,
+    mustEnd: session.mustEnd,
   };
+
+  // A record is a proxy report if any part of it was. Resuming a caregiver's
+  // call under the participant's own verification would otherwise present the
+  // caregiver's answers, unflagged, as the participant's.
+  if (prior.respondent === "caregiver" && session.respondent !== "caregiver") {
+    session.respondent = "caregiver";
+    session.audit.record({
+      actor: "system",
+      action: "RESPONDENT_CARRIED_FORWARD",
+      entity: "CheckInSession",
+      entityId: session.id,
+      after: { from: prior.id, respondent: "caregiver" },
+      reason:
+        "The dropped call being resumed was answered by a caregiver, so the merged " +
+        "record is marked as a proxy report.",
+    });
+  }
+  // A dropped call that had already been told to end stays ended. A redial
+  // after a fever "yes" otherwise went straight back into the screen.
+  if (prior.mustEnd && !session.mustEnd) session.mustEnd = prior.mustEnd;
 
   const priorEvents = structuredClone(prior.adverseEvents);
   const priorEscalations = structuredClone(prior.escalations);
@@ -874,6 +879,31 @@ const handlers: Record<string, Handler> = {
         isError: true,
       };
     }
+    if (session.audit.all().some((e) => e.action === "PROXY_RESPONDENT_REFUSED")) {
+      return {
+        result: {
+          verified: false,
+          instruction:
+            "This call was already refused because a caregiver was answering. Do " +
+            "not verify again. Call complete_check_in with ended_early true.",
+        },
+        isError: true,
+      };
+    }
+    // Fails closed. Anything but an explicit "self" or "caregiver" ("proxy",
+    // "family", a missing field) used to verify as the participant, which is the
+    // one answer that skips the proxy rule. Not counted as an attempt.
+    if (input.respondent !== "self" && input.respondent !== "caregiver") {
+      return {
+        result: {
+          verified: false,
+          instruction:
+            `Who is answering is not yet clear. Ask exactly: "${FIXED_RESPONDENT_PROMPT}" ` +
+            'then call verify_subject again with respondent "self" or "caregiver".',
+        },
+        isError: true,
+      };
+    }
     if (session.verificationAttempts >= 2) {
       session.audit.record({
         actor: "system",
@@ -998,9 +1028,8 @@ const handlers: Record<string, Handler> = {
 
     // Who is on the line, decided before anything clinical is asked, because a
     // caregiver's account recorded as the participant's own words is a
-    // data-integrity failure and a consent failure at once. The schema requires
-    // the field on every real call; absent only when a test calls this directly.
-    const respondent = input.respondent === "caregiver" ? "caregiver" : "self";
+    // data-integrity failure and a consent failure at once.
+    const respondent: "self" | "caregiver" = input.respondent;
     if (respondent === "caregiver" && PROTOCOL.proxyReporting === "not_permitted") {
       // Bound for the same reason as the withdrawal path: the caregiver has
       // spoken the participant's date of birth, and an erasure request finds
@@ -1165,10 +1194,16 @@ const handlers: Record<string, Handler> = {
         ? null
         : Boolean(input.answer);
 
-    const measurement =
-      item.onPositive && typeof input.measurement === "string" && input.measurement.trim()
-        ? input.measurement.trim()
-        : null;
+    // Screened like a verbatim: a temperature the subject never said is the
+    // same fabrication as a quote they never said.
+    const measurement = item.onPositive
+      ? await screenQuote(
+          session,
+          "measurement",
+          typeof input.measurement === "string" ? input.measurement.trim() : null,
+          `record_safety_screen_item:${itemId}`,
+        )
+      : null;
 
     const record = {
       itemId,
@@ -1213,9 +1248,12 @@ const handlers: Record<string, Handler> = {
     // paged nobody. The prompt tells the agent not to escalate screen items
     // itself, so nothing downstream caught it either.
     const wasAlreadyPositive = before?.answer === true;
+    const coveredByNet = session.escalations.some(
+      (e) => e.urgency === item.urgencyIfPositive && escalationCovers(e.category, item.label),
+    );
     let raised: string | null = null;
     let delivery: Awaited<ReturnType<typeof deliverEscalation>> | null = null;
-    if (isRedFlag && !wasAlreadyPositive) {
+    if (isRedFlag && !wasAlreadyPositive && !coveredByNet) {
       const escalation = {
         id: nextEscalationId(session),
         urgency: item.urgencyIfPositive,
@@ -1274,7 +1312,7 @@ const handlers: Record<string, Handler> = {
     // it succeeded is the same untruth in the other direction.
     let paged = delivery?.delivered === true;
     if (isRedFlag && !raised) {
-      const prior = session.escalations.find((e) => e.category === item.label);
+      const prior = session.escalations.find((e) => escalationCovers(e.category, item.label));
       if (prior) {
         const attempts = await getDeliveryStore().forSession(session.id);
         paged = attempts.some(
@@ -1919,6 +1957,7 @@ const handlers: Record<string, Handler> = {
       after: record,
       reason: `Agent-initiated escalation at urgency '${urgency}'.`,
     });
+    armEmergencyEnd(session, record);
 
     const coordinator = session.subject?.coordinatorName ?? "the study coordinator";
 
@@ -2004,6 +2043,24 @@ const handlers: Record<string, Handler> = {
   },
 };
 
+/**
+ * What may still run once a call must end: ending it, paging about something
+ * new, verifying who it was (so the record is attributable), and re-recording a
+ * screen item already answered yes, which is how a positive-path item's one
+ * follow-up arrives.
+ */
+function allowedWhileEnding(session: CheckInSession, name: string, input: unknown): boolean {
+  if (name === "complete_check_in" || name === "escalate_to_coordinator") return true;
+  if (name === "verify_subject") return true;
+  if (name !== "record_safety_screen_item") return false;
+  const itemId = (input as Record<string, unknown> | null)?.item_id;
+  const item = PROTOCOL.safetyScreen.find((i) => i.id === itemId);
+  // Re-recording an item already answered yes adds nothing new to the call, and
+  // its result is how the model learns whether that page actually went out.
+  return Boolean(item) &&
+    session.safetyScreen?.items.some((i) => i.itemId === itemId && i.answer === true) === true;
+}
+
 export async function executeTool(
   session: CheckInSession,
   name: string,
@@ -2016,7 +2073,7 @@ export async function executeTool(
   // Once the call has been told to end, nothing more is collected. The
   // instruction to end it goes to the model; this is what holds if the model
   // carries on regardless.
-  if (session.mustEnd && name !== "complete_check_in") {
+  if (session.mustEnd && !allowedWhileEnding(session, name, input)) {
     return {
       result: {
         error:

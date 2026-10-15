@@ -19,7 +19,7 @@ import {
 } from "../lib/store/subjects.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
 const AE = {
   verbatim_term: "I've been very tired",
   coded_term: "Fatigue",

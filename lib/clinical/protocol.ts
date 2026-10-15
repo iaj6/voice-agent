@@ -32,6 +32,12 @@ export interface SafetyScreenItem {
    * the generic emergency line. The page goes out on the "yes" itself; the
    * follow-up only adds the measurement to the record, and nothing waits on it.
    */
+  /**
+   * Safety-net rule categories that raise the same alarm as a "yes" here, at the
+   * same urgency. Without it, "fever" in the open question and a "yes" to this
+   * item paged the coordinator twice for one fever.
+   */
+  sameAlarmAs?: string[];
   onPositive?: {
     /** Asked once, word for word, after the page has gone out. */
     followUpPrompt: string;
@@ -130,6 +136,7 @@ export const PROTOCOL: ProtocolDefinition = {
       prompt: "Have you had a fever, or felt hot and shivery?",
       redFlag: true,
       urgencyIfPositive: "emergency",
+      sameAlarmAs: ["Possible neutropenic fever"],
       onPositive: {
         followUpPrompt:
           "What was the highest temperature you measured, if you took it?",
@@ -418,4 +425,19 @@ export function findSubject(
 /** The country of a site, by its numeric prefix. Used for pre-verification hints. */
 export function siteCountryForPrefix(prefix: string): string | null {
   return SUBJECTS.find((s) => s.siteId === prefix)?.siteCountry ?? null;
+}
+
+/**
+ * Whether an existing escalation's category already covers `category`.
+ *
+ * Categories are "; "-joined rule names. A screen item and the net rules it
+ * names in `sameAlarmAs` count as one alarm in either direction.
+ */
+export function escalationCovers(existing: string | null, category: string): boolean {
+  const parts = (existing ?? "").split("; ");
+  if (parts.includes(category)) return true;
+  return PROTOCOL.safetyScreen.some((item) => {
+    const group = [item.label, ...(item.sameAlarmAs ?? [])];
+    return group.length > 1 && group.includes(category) && parts.some((p) => group.includes(p));
+  });
 }

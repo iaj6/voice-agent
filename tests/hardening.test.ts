@@ -15,8 +15,8 @@ import { __setSessionStore, getSessionStore } from "../lib/store/session-store.t
 import { __setKeyStore } from "../lib/store/keys.ts";
 import { __setSubjectStore, getSubjectStore } from "../lib/store/subjects.ts";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
-const WRONG = { subject_id: "001-0042", date_of_birth: "1958-03-12" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
+const WRONG = { subject_id: "001-0042", date_of_birth: "1958-03-12", respondent: "self" };
 
 beforeEach(() => {
   __setSessionStore(null);
@@ -53,6 +53,7 @@ test("a verified call cannot be re-verified as someone else", async () => {
   const out = await executeTool(session, "verify_subject", {
     subject_id: other.subjectId,
     date_of_birth: other.dateOfBirth,
+    respondent: "self",
   });
   assert.equal((out.result as Record<string, unknown>).verified, false);
   assert.equal(session.subject?.subjectId, first, "identity changed mid-call");

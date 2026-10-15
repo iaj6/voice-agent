@@ -15,7 +15,7 @@ import { PROTOCOL } from "../lib/clinical/protocol.ts";
 import { assertedHits, scanForSafetySignals } from "../lib/clinical/safety.ts";
 import type { CheckInSession } from "../lib/store/session.ts";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
 const FEVER = PROTOCOL.safetyScreen.find((i) => i.id === "fever")!;
 
 beforeEach(() => {
@@ -193,4 +193,68 @@ test("the closing and proxy lines are pre-warmed fixed speech", async () => {
   const { FIXED_LINES, FIXED_PROXY_NOT_PERMITTED } = await import("../lib/agent/fixed-speech.ts");
   assert.ok(FIXED_LINES.includes(FIXED_PROXY_NOT_PERMITTED));
   assert.ok(FIXED_LINES.includes(FEVER.onPositive!.closingInstruction));
+});
+
+// Second review: the lock arms on the first emergency, not the model's next move.
+
+test("a first fever 'yes' locks the call even if the model skips the follow-up", async () => {
+  const session = await verified();
+  session.subjectUtterances = ["Yes."];
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever", answer: true, verbatim: null, measurement: null,
+  });
+  assert.ok(session.mustEnd, "the call was not locked on the yes");
+  const next = await executeTool(session, "record_adherence", {
+    doses_missed_since_last_check_in: 0, reason_verbatim: null,
+  });
+  assert.equal(next.isError, true);
+});
+
+test("a locked call can still page about something new", async () => {
+  const session = await verified();
+  session.subjectUtterances = ["Yes.", "And he collapsed earlier"];
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever", answer: true, verbatim: null, measurement: null,
+  });
+  const out = await executeTool(session, "escalate_to_coordinator", {
+    urgency: "emergency", reason: "Reports collapsing earlier today", related_event_ids: [],
+  });
+  assert.doesNotMatch(String((out.result as Record<string, unknown>).error ?? ""), /must end/);
+  assert.equal(session.escalations.length, 2);
+});
+
+test("an unclear respondent is asked again, not treated as the participant", async () => {
+  for (const respondent of [undefined, "proxy", "Caregiver"]) {
+    const session = await getSessionStore().create();
+    const out = await executeTool(session, "verify_subject", { ...VERIFY, respondent });
+    assert.equal(session.subject, null, `respondent ${respondent} verified as self`);
+    assert.equal(session.verificationAttempts, 0, "an unclear respondent cost an attempt");
+    assert.match(instruction(out), /Who is answering/);
+  }
+});
+
+test("a temperature the subject never said is not recorded", async () => {
+  const session = await verified();
+  session.subjectUtterances = ["Yes.", "No, I didn't take it."];
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever", answer: true, verbatim: null, measurement: null,
+  });
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever", answer: true, verbatim: null, measurement: "38.9 C",
+  });
+  const item = session.safetyScreen!.items.find((i) => i.itemId === "fever")!;
+  assert.equal(item.measurement, null);
+});
+
+test("fever named by the net and then answered yes on the screen pages once", async () => {
+  const { runTurn } = await import("../lib/agent/runner.ts");
+  const session = await verified();
+  for await (const ev of runTurn(session, { source: "subject", utterance: "I've had a fever since last night" })) {
+    if (ev.type === "error") break;
+  }
+  assert.equal(session.escalations.length, 1);
+  await executeTool(session, "record_safety_screen_item", {
+    item_id: "fever", answer: true, verbatim: null, measurement: null,
+  });
+  assert.equal(session.escalations.length, 1, "one fever produced two emergency pages");
 });

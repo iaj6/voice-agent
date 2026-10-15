@@ -29,7 +29,7 @@ import type { CheckInSession } from "../lib/store/session.ts";
 
 process.env.VOICE_AGENT_PUBLIC_URL = "http://localhost:3100";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
 const SPOKEN = "I've been very tired, my daughter Sarah drove me to Northlake";
 
 class CapturingTransport implements EscalationTransport {

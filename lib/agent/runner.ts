@@ -13,7 +13,8 @@ import {
   scanForSafetySignals,
   type SafetyNetHit,
 } from "../clinical/safety.ts";
-import { PROTOCOL, siteCountryForPrefix } from "../clinical/protocol.ts";
+import { armEmergencyEnd } from "../escalation/raise.ts";
+import { PROTOCOL, escalationCovers, siteCountryForPrefix } from "../clinical/protocol.ts";
 import { localise, speakingRegion, type Region } from "../clinical/locale.ts";
 import {
   nextEscalationId,
@@ -409,7 +410,7 @@ export async function* runTurn(
     const alreadyRaised = session.escalations.find(
       (e) =>
         e.triggeredBy === "safety_net" &&
-        hits.every((h) => (e.category ?? "").split("; ").includes(h.category)),
+        hits.every((h) => escalationCovers(e.category, h.category)),
     );
     if (alreadyRaised) {
       session.audit.record({
@@ -483,6 +484,7 @@ export async function* runTurn(
 
     // Persist before the model runs. A rule-based escalation is the one record
     // that must survive a crash on the very next line.
+    armEmergencyEnd(session, record);
     await saveSession(session);
 
     // Told before the mail round-trip, not after. These two used to fire

@@ -135,6 +135,7 @@ test("a UK participant's failed escalation does not mention 911", async () => {
   await executeTool(session, "verify_subject", {
     subject_id: "002-0013",
     date_of_birth: "1949-07-24",
+    respondent: "self",
   });
   assert.equal(session.subject?.siteCountry, "GB", "the fixture is not a UK site");
 
@@ -155,6 +156,7 @@ test("a US participant still gets 911", async () => {
   await executeTool(session, "verify_subject", {
     subject_id: "001-0042",
     date_of_birth: "1958-03-11",
+    respondent: "self",
   });
 
   const out = await executeTool(session, "escalate_to_coordinator", {
@@ -192,6 +194,7 @@ test("an eval session records the page and sends nothing", async () => {
   await executeTool(session, "verify_subject", {
     subject_id: "001-0042",
     date_of_birth: "1958-03-11",
+    respondent: "self",
   });
   const out = await executeTool(session, "escalate_to_coordinator", {
     urgency: "emergency",
@@ -230,6 +233,7 @@ test("a synthetic session never enters the escalation ladder", async () => {
   await executeTool(session, "verify_subject", {
     subject_id: "001-0042",
     date_of_birth: "1958-03-11",
+    respondent: "self",
   });
   await executeTool(session, "escalate_to_coordinator", {
     urgency: "emergency",

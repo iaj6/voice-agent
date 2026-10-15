@@ -26,7 +26,7 @@ import {
 import { executeTool } from "../lib/agent/tools.ts";
 import { createScratchDb, databaseAvailable, type ScratchDb } from "./helpers/scratch-db.ts";
 
-const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11" };
+const VERIFY = { subject_id: "001-0042", date_of_birth: "1958-03-11", respondent: "self" };
 const SPOKEN = ["I've been very tired, I couldn't shower Tuesday"];
 
 let scratch: ScratchDb | null = null;
